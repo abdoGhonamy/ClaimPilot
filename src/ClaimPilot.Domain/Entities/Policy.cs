@@ -40,6 +40,7 @@ public class PolicyChunk
     public required string Clause { get; set; }
     public int? Page { get; set; }
     public string? Metadata { get; set; }
+    public float[]? Embedding { get; set; }
     public required string ContentHash { get; set; }
     public int? TokenCount { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
