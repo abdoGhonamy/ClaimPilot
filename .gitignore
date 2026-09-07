@@ -1,0 +1,37 @@
+# Build results
+bin/
+obj/
+*.user
+*.suo
+
+# .NET
+*.nupkg
+*.snupkg
+*.nupkg.metadata
+
+# Secrets & local config
+.env
+.env.local
+appsettings.Local.json
+secrets.json
+
+# Test results
+TestResults/
+*.trx
+coverage/
+coverage.*
+
+# Rider / VS
+.idea/
+.vs/
+.vscode/
+*.DotSettings.user
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Migrations snapshot lock (keep migrations committed)
+# logs
+*.log
+logs/
