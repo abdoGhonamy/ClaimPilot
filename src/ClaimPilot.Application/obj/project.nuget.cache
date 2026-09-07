@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "qZyy8H7AKSw=",
+  "success": true,
+  "projectFilePath": "/home/abdelbadea/API/Insurance_claims_adjudication/InsuranceClaimsCopilot/src/ClaimPilot.Application/ClaimPilot.Application.csproj",
+  "expectedPackageFiles": [
+    "/home/abdelbadea/.nuget/packages/microsoft.extensions.dependencyinjection.abstractions/10.0.12/microsoft.extensions.dependencyinjection.abstractions.10.0.12.nupkg.sha512",
+    "/home/abdelbadea/.nuget/packages/microsoft.extensions.options/10.0.12/microsoft.extensions.options.10.0.12.nupkg.sha512",
+    "/home/abdelbadea/.nuget/packages/microsoft.extensions.primitives/10.0.12/microsoft.extensions.primitives.10.0.12.nupkg.sha512"
+  ],
+  "logs": []
+}

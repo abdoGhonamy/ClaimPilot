@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClaimPilot.API/ClaimPilot.API.csproj" />
+    <Project Path="src/ClaimPilot.Application/ClaimPilot.Application.csproj" />
+    <Project Path="src/ClaimPilot.Domain/ClaimPilot.Domain.csproj" />
+    <Project Path="src/ClaimPilot.Infrastructure/ClaimPilot.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ClaimPilot.Tests/ClaimPilot.Tests.csproj" />
+  </Folder>
+</Solution>
