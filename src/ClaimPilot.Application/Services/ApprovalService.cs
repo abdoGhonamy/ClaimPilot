@@ -188,8 +188,8 @@ public sealed class ApprovalService : IApprovalService
         await _approvals.AddHistoryAsync(history, ct);
 
         await _audit.RecordAsync(new AuditLogEntry(
-            "ApprovalItem", item.Id, action.ToString(), actorId: reviewerId,
-            before: previous, after: next, runId: item.RunId?.ToString()), ct);
+            "ApprovalItem", item.Id, action.ToString(), ActorId: reviewerId,
+            Before: previous, After: next, RunId: item.RunId?.ToString()), ct);
     }
 
     private static string ComputeDiff(string? before, string after)

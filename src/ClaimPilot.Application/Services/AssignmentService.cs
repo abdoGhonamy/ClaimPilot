@@ -76,8 +76,8 @@ public sealed class AssignmentService : IAssignmentService
         }
 
         await _audit.RecordAsync(new AuditLogEntry(
-            "ApprovalItem", approvalItemId, "Assigned", actorId: "system",
-            before: null, after: assignee), ct);
+            "ApprovalItem", approvalItemId, "Assigned", ActorId: "system",
+            Before: null, After: assignee), ct);
 
         _logger.LogInformation("Assigned approval item {ItemId} to {Assignee} ({Reason})",
             approvalItemId, assignee, reason);

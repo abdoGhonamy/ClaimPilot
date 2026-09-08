@@ -106,7 +106,6 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         var anomalies = new List<AnomalyDto>();
         var iteration = 0;
         RequestState state = new();
-        bool degraded = false;
 
         try
         {
@@ -194,7 +193,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
                 RunId = run.Id,
                 Status = ApprovalStatus.Pending,
                 Priority = ComputePriority(claim, state.PolicyLimit),
-                SLADeadline = ComputeDeadline(priority),
+                SLADeadline = ComputeDeadline(ComputePriority(claim, state.PolicyLimit)),
                 Title = $"Decision required — {claim.ClaimNumber}",
                 Summary = draftResult.Result.Output
             };
@@ -266,7 +265,6 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
 
             if (_options.EnableFallbackRag)
             {
-                degraded = true;
                 run.Status = RunStatus.Degraded;
                 run.Degraded = true;
                 await _claims.SaveChangesAsync(CancellationToken.None);
@@ -335,6 +333,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         var runRecord = new AgentRun
         {
             AdjudicationRunId = run.Id,
+            AdjudicationRun = run,
             AgentType = agent.AgentType,
             Status = RunStatus.Running,
             Iteration = iteration,
@@ -441,8 +440,8 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         if (string.IsNullOrWhiteSpace(output)) return Array.Empty<AnomalyDto>();
         try
         {
-            return JsonSerializer.Deserialize<List<AnomalyDto>>(output)
-                ?? Array.Empty<AnomalyDto>();
+            var list = JsonSerializer.Deserialize<List<AnomalyDto>>(output);
+            return (IReadOnlyList<AnomalyDto>?)list ?? Array.Empty<AnomalyDto>();
         }
         catch (JsonException)
         {

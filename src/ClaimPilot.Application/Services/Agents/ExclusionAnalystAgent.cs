@@ -46,7 +46,7 @@ public sealed class ExclusionAnalystAgent : IAgent
         var match = JsonSerializer.Deserialize<PolicyMatchResult>(retrieveCall.OutputJson)
             ?? throw new DomainException("Exclusion Analyst could not parse policy match.");
 
-        List<CoverageLine> covered = match.CoverageItems;
+        IReadOnlyList<CoverageLine> covered = match.CoverageItems;
         var toolCalls = new List<ToolCallRecord> { retrieveCall };
 
         // Use the LLM only to classify which exclusions are plausibly applicable,
