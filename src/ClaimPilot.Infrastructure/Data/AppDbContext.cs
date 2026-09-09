@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 using ClaimPilot.Domain.Entities;
@@ -5,7 +7,7 @@ using ClaimPilot.Domain.Enums;
 
 namespace ClaimPilot.Infrastructure.Data;
 
-public sealed class AppDbContext : DbContext
+public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole, string>
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
