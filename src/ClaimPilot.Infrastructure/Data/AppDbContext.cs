@@ -31,6 +31,7 @@ public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole,
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
         modelBuilder.HasPostgresExtension("vector");
 
         ConfigurePolicy(modelBuilder);

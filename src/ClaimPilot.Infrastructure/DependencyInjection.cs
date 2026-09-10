@@ -3,6 +3,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
+using Npgsql;
+using Pgvector;
+using Pgvector.EntityFrameworkCore;
+using Pgvector.Npgsql;
 using StackExchange.Redis;
 
 using ClaimPilot.Application.Interfaces;
@@ -29,10 +33,15 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? "Host=localhost;Port=5432;Database=claimpilot;Username=claimpilot;Password=claimpilot";
 
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var dataSource = dataSourceBuilder.Build();
+
         services.AddDbContext<AppDbContext>(options =>
-            options.UseNpgsql(connectionString, npgsql =>
+            options.UseNpgsql(dataSource, npgsql =>
             {
                 npgsql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+                npgsql.UseVector();
             }));
 
         return services
