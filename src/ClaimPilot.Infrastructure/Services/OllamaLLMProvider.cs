@@ -96,9 +96,10 @@ public sealed class OllamaLLMProvider : ILLMProvider
         var promptTokens = 0;
         var buffer = new StringBuilder();
 
-        while (!reader.EndOfStream)
+        while (true)
         {
-            var line = await reader.ReadLineAsync(ct) ?? string.Empty;
+            var line = await reader.ReadLineAsync(ct);
+            if (line is null) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             var (parsed, fragment) = TryParseChunk(line, ref promptTokens, ref outputTokens);

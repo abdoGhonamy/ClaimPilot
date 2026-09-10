@@ -32,6 +32,6 @@ public sealed class AskController : ControllerBase
             result.RefusalReason,
             result.Citations.Select(c => new CitationDto(
                 c.PolicyNumber, c.Citation.Version, c.Citation.Section, c.Citation.Clause, c.Citation.Page,
-                c.Citation.TextExcerpt, c.Citation.Source, c.Score)).ToList()));
+                c.Citation.TextExcerpt ?? string.Empty, c.Citation.Source ?? string.Empty, c.Score)).ToList()));
     }
 }
