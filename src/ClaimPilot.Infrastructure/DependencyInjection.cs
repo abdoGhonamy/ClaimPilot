@@ -19,6 +19,7 @@ using ClaimPilot.Application.Interfaces.Review;
 using ClaimPilot.Application.Interfaces.Trace;
 using ClaimPilot.Application.Services;
 using ClaimPilot.Infrastructure.Data;
+using ClaimPilot.Infrastructure.Data.Seed;
 using ClaimPilot.Infrastructure.Repositories;
 using ClaimPilot.Infrastructure.Services;
 using ClaimPilot.Infrastructure.Services.Documents;
@@ -88,6 +89,7 @@ public static class DependencyInjection
             new ReviewDataProvider(sp.GetRequiredService<IApprovalRepository>()));
         services.AddScoped<IRunTraceViewBuilder, RunTraceViewBuilder>();
         services.AddScoped<IApprovalQueueReader, ReviewQueueReader>();
+        services.AddScoped<DemoDataSeeder>();
 
         return services;
     }

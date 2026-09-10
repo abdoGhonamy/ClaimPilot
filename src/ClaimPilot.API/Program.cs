@@ -11,6 +11,7 @@ using ClaimPilot.API.Middleware;
 using ClaimPilot.Application;
 using ClaimPilot.Infrastructure;
 using ClaimPilot.Infrastructure.Data;
+using ClaimPilot.Infrastructure.Data.Seed;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -117,6 +118,9 @@ using (var scope = app.Services.CreateScope())
 
     var seeder = scope.ServiceProvider.GetRequiredService<SeedData>();
     await seeder.SeedAsync(CancellationToken.None);
+
+    var demoData = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
+    await demoData.SeedAsync(CancellationToken.None);
 }
 
 app.UseExceptionHandler();
