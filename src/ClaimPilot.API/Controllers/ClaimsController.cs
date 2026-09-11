@@ -98,24 +98,27 @@ public sealed class ClaimsController : ControllerBase
         try
         {
             var runTask = Task.Run(() => orchestrator.RunAsync(claimId, correlationId, ct), ct);
-
-            while (await channel.Reader.WaitToReadAsync(ct))
+            var drainTask = Task.Run(async () =>
             {
-                while (channel.Reader.TryRead(out var message))
+                await foreach (var message in channel.Reader.ReadAllAsync(ct))
                 {
                     await Response.WriteAsync(message, ct);
                     await Response.Body.FlushAsync(ct);
                 }
-            }
+            }, ct);
 
             var run = await runTask;
+            channel.Writer.TryComplete();
+            await drainTask;
+
             await Response.WriteAsync(SerializeEvent("run_complete", run.Status, run.RunId, null, null,
                 System.Text.Json.JsonSerializer.Serialize(run)), ct);
         }
         catch (Exception ex)
         {
+            channel.Writer.TryComplete();
             await Response.WriteAsync(SerializeEvent("error", "error", claimId, null, null,
-                System.Text.Json.JsonSerializer.Serialize(new { message = ex.Message })), ct);
+                System.Text.Json.JsonSerializer.Serialize(new { message = ex.Message })), CancellationToken.None);
         }
         finally
         {

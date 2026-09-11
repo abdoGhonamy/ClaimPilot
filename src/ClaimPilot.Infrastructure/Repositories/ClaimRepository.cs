@@ -26,10 +26,12 @@ public sealed class ClaimRepository : IClaimRepository
 
     public async Task<AdjudicationRun> CreateRunAsync(Guid claimId, CancellationToken ct)
     {
+        var claim = await _db.Claims.FirstOrDefaultAsync(c => c.Id == claimId, ct)
+            ?? throw new Domain.Exceptions.DomainException($"Claim {claimId} not found.");
         var run = new AdjudicationRun
         {
             ClaimId = claimId,
-            Claim = (await GetByIdAsync(claimId, ct)) ?? throw new Domain.Exceptions.DomainException($"Claim {claimId} not found."),
+            Claim = claim,
             Status = RunStatus.Running,
             StartedAt = DateTime.UtcNow
         };
@@ -42,10 +44,22 @@ public sealed class ClaimRepository : IClaimRepository
         => await _db.AdjudicationRuns
             .Include(r => r.AgentRuns)
             .Include(r => r.Anomalies)
-            .AsNoTracking()
             .FirstOrDefaultAsync(r => r.Id == runId, ct);
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);
+
+    public async Task<Decision?> GetDecisionForRunAsync(Guid runId, CancellationToken ct)
+        => await _db.Decisions
+            .Include(d => d.AdjudicationRun)
+            .ThenInclude(r => r.Claim)
+            .OrderByDescending(d => d.CreatedAt)
+            .FirstOrDefaultAsync(d => d.AdjudicationRunId == runId, ct);
+
+    public async Task AddLetterAsync(DecisionLetter letter, CancellationToken ct)
+    {
+        _db.DecisionLetters.Add(letter);
+        await _db.SaveChangesAsync(ct);
+    }
 
     public Task AddAsync(Claim claim, CancellationToken ct)
     {

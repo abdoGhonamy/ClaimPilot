@@ -23,6 +23,8 @@ public interface IClaimRepository
     Task<IReadOnlyList<Claim>> GetAllAsync(CancellationToken ct);
     Task<AdjudicationRun> CreateRunAsync(Guid claimId, CancellationToken ct);
     Task<AdjudicationRun?> GetRunAsync(Guid runId, CancellationToken ct);
+    Task<Decision?> GetDecisionForRunAsync(Guid runId, CancellationToken ct);
+    Task AddLetterAsync(DecisionLetter letter, CancellationToken ct);
     Task SaveChangesAsync(CancellationToken ct);
     Task AddAsync(Claim claim, CancellationToken ct);
 }
