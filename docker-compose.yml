@@ -1,0 +1,80 @@
+name: claimpilot
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: claimpilot-pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-claimpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-claimpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claimpilot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb/001-vector.sql:/docker-entrypoint-initdb.d/001-vector.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-claimpilot} -d ${POSTGRES_DB:-claimpilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: claimpilot-redis
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: claimpilot-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    ports:
+      - "${OLLAMA_PORT:-11435}:11434"
+    command: >
+      sh -c "ollama serve &
+             until ollama list >/dev/null 2>&1; do sleep 2; done;
+             ollama pull llama3.2;
+             ollama pull nomic-embed-text;
+             wait"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claimpilot-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=db;Port=5432;Database=${POSTGRES_DB:-claimpilot};Username=${POSTGRES_USER:-claimpilot};Password=${POSTGRES_PASSWORD:-claimpilot}
+      Redis__ConnectionString: redis:6379
+      Ollama__BaseUrl: http://ollama:11434
+      Ollama__ChatModel: llama3.2
+      Ollama__EmbeddingModel: nomic-embed-text
+      Jwt__Key: ${JWT_KEY:-ClaimPilotDevSigningKeyChangeMe_0123456789ABCDEF}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  ollama-models:

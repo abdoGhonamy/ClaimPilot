@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/TestResults/
+*.user
+*.suo
+.env
+.env.local
+.git
+.github
+docs
+tests/ClaimPilot.Tests/TestResults
+traces/
+.DS_Store
