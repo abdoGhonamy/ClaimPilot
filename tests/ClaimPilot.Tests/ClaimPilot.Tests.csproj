@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -23,6 +27,7 @@
     <ProjectReference Include="..\..\src\ClaimPilot.Application\ClaimPilot.Application.csproj" />
     <ProjectReference Include="..\..\src\ClaimPilot.Domain\ClaimPilot.Domain.csproj" />
     <ProjectReference Include="..\..\src\ClaimPilot.Infrastructure\ClaimPilot.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\ClaimPilot.API\ClaimPilot.API.csproj" />
   </ItemGroup>
 
 </Project>
