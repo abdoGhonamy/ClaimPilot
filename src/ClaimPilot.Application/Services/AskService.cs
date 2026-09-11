@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
+using ClaimPilot.Application.Common;
 using ClaimPilot.Application.Interfaces;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Repositories;
@@ -136,7 +137,7 @@ public sealed class AskService
         var answer = completion.Text.Trim();
 
         // Deterministic groundedness: numbers in the answer must come from the excerpts.
-        if (ContainsUnsupportedNumbers(answer, result.Chunks))
+        if (GroundednessChecks.ContainsUnsupportedNumbers(answer, result.Chunks))
         {
             return ("Not enough information in the policy corpus to determine this.", true,
                 "Answer contained amounts not present in the policy corpus.");
@@ -144,21 +145,6 @@ public sealed class AskService
 
         var refuses = answer.Contains("Not enough information in the policy corpus", StringComparison.OrdinalIgnoreCase);
         return (answer, refuses, refuses ? "Groundedness check indicates insufficient corpus information." : null);
-    }
-
-    private static bool ContainsUnsupportedNumbers(string answer, IReadOnlyList<RetrievedChunk> chunks)
-    {
-        var corpus = string.Join(' ', chunks.Select(c => c.Text));
-        var tokens = answer.Split([' ', '\n', ',', '.', '$'], StringSplitOptions.RemoveEmptyEntries);
-        foreach (var token in tokens)
-        {
-            if (decimal.TryParse(token, out var n) && n > 0 && !corpus.Contains(token, StringComparison.OrdinalIgnoreCase))
-            {
-                var bare = n.ToString();
-                if (!corpus.Contains(bare)) return true;
-            }
-        }
-        return false;
     }
 
     private static decimal EstimatedLocalCost(LLMResult result) =>

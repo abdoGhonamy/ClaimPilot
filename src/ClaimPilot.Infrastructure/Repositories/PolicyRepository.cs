@@ -25,11 +25,11 @@ public sealed class PolicyRepository : IPolicyRepository
     /// before the incident date. Never the "newest" version blindly.
     /// </summary>
     public async Task<PolicyVersion?> GetApplicableVersionAsync(Guid policyId, DateTime incidentDate, CancellationToken ct)
-        => await _db.PolicyVersions
-            .AsNoTracking()
-            .Where(v => v.PolicyId == policyId && v.EffectiveDate <= incidentDate && v.Status != Domain.Enums.PolicyVersionStatus.Retired)
-            .OrderByDescending(v => v.EffectiveDate)
-            .FirstOrDefaultAsync(ct);
+        => ClaimPilot.Domain.Services.ApplicableVersionRule.Select(
+            await _db.PolicyVersions.AsNoTracking()
+                .Where(v => v.PolicyId == policyId)
+                .ToListAsync(ct),
+            incidentDate);
 
     public async Task<PolicyVersion?> GetVersionAsync(Guid policyId, int version, CancellationToken ct)
         => await _db.PolicyVersions.AsNoTracking()
