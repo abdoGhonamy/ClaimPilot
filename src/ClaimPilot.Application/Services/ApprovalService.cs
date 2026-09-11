@@ -28,12 +28,14 @@ public sealed class ApprovalService : IApprovalService
 {
     private readonly IApprovalRepository _approvals;
     private readonly IAuditService _audit;
+    private readonly IClaimRepository _claims;
     private readonly ILogger<ApprovalService> _logger;
 
-    public ApprovalService(IApprovalRepository approvals, IAuditService audit, ILogger<ApprovalService> logger)
+    public ApprovalService(IApprovalRepository approvals, IAuditService audit, IClaimRepository claims, ILogger<ApprovalService> logger)
     {
         _approvals = approvals;
         _audit = audit;
+        _claims = claims;
         _logger = logger;
     }
 
@@ -47,6 +49,8 @@ public sealed class ApprovalService : IApprovalService
         item.ReviewedAt = DateTime.UtcNow;
         await AppendHistoryAsync(item, ApprovalAction.Approved, req.ReviewerId, req.Comment,
             before, State(item), ct);
+
+        await FinalizeDecisionAsync(item, req.ReviewerId, req.Comment, ct);
 
         return new ReviewActionResult(item.Id, item.Status, item.RunId);
     }
@@ -89,6 +93,53 @@ public sealed class ApprovalService : IApprovalService
             before, State(item), ct, editDiff: diff);
 
         return new ReviewActionResult(item.Id, ApprovalStatus.Pending, item.RunId);
+    }
+
+    private async Task FinalizeDecisionAsync(ApprovalItem item, string reviewerId, string? comment, CancellationToken ct)
+    {
+        var decision = await _claims.GetDecisionForRunAsync(item.RunId ?? Guid.Empty, ct);
+        if (decision is null)
+        {
+            _logger.LogWarning("Approval {ApprovalId} approved but no draft decision found for run {RunId}", item.Id, item.RunId);
+            return;
+        }
+
+        decision.IsFinal = true;
+        decision.ApprovalItemId = item.Id;
+        var run = decision.AdjudicationRun;
+        if (run.FinalDecisionId != decision.Id)
+        {
+            run.FinalDecisionId = decision.Id;
+            run.FinalDecision = decision;
+        }
+        await _claims.SaveChangesAsync(ct);
+
+        var letterText = BuildLetterText(decision, comment);
+        var letter = new DecisionLetter
+        {
+            DecisionId = decision.Id,
+            Decision = decision,
+            LetterText = letterText,
+            IssuedBy = Guid.TryParse(reviewerId, out var reviewerGuid) ? reviewerGuid : Guid.Empty
+        };
+        await _claims.AddLetterAsync(letter, ct);
+
+        await _audit.RecordAsync(new AuditLogEntry(
+            "Decision", decision.Id, "Finalised",
+            ActorId: reviewerId, After: $"Final decision letter issued ({decision.Id}).",
+            RunId: run.Id.ToString()), ct);
+    }
+
+    private static string BuildLetterText(Decision decision, string? comment)
+    {
+        var claim = decision.AdjudicationRun?.Claim;
+        var @ref = claim is null ? decision.AdjudicationRunId.ToString() : $"{claim.ClaimNumber} ({claim.PolicyNumber})";
+        var head = decision.DecisionType == DecisionType.Approve
+            ? $"We have approved your claim {claim?.ClaimNumber} under policy {claim?.PolicyNumber}."
+            : $"We have denied your claim {claim?.ClaimNumber} under policy {claim?.PolicyNumber}.";
+        var money = decision.ApprovedAmount is { } amt ? $" The approved amount is {amt.ToString("C", System.Globalization.CultureInfo.GetCultureInfo("en-US"))}." : string.Empty;
+        var note = string.IsNullOrWhiteSpace(comment) ? string.Empty : $" Reviewer note: {comment.Trim()}";
+        return $"Re: {(@ref)}\n{head}{money}{note}\nThis is the final decision issued after human review.";
     }
 
     public async Task<ReviewActionResult> ReReviewAsync(Guid id, ReReviewRequest req, CancellationToken ct)

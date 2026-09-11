@@ -27,7 +27,7 @@ public sealed class ReviewController : ControllerBase
         [FromQuery] ApprovalStatus? status, [FromQuery] string? assigneeId, [FromQuery] Priority? priority,
         CancellationToken ct)
     {
-        var items = await _queue.GetQueueAsync(new ReviewQueueFilter(status, assigneeId, null, priority), ct);
+        var items = await _queue.GetQueueAsync(new ReviewQueueFilter(status ?? ApprovalStatus.Pending, assigneeId, null, priority), ct);
         return Ok(items);
     }
 
@@ -41,20 +41,24 @@ public sealed class ReviewController : ControllerBase
     }
 
     [HttpPost("{approvalItemId:guid}/approve")]
+    [Authorize(Roles = "Supervisor")]
     [ProducesResponseType<ReviewActionResult>(StatusCodes.Status200OK)]
     public async Task<ActionResult<ReviewActionResult>> Approve(Guid approvalItemId, [FromBody] ReviewApproveBody request, CancellationToken ct)
         => Ok(await _service.ApproveAsync(approvalItemId, new ApproveRequest(ReviewerId(), request.Comment), ct));
 
     [HttpPost("{approvalItemId:guid}/reject")]
+    [Authorize(Roles = "Supervisor")]
     public async Task<ActionResult<ReviewActionResult>> Reject(Guid approvalItemId, [FromBody] ReviewRejectBody request, CancellationToken ct)
         => Ok(await _service.RejectAsync(approvalItemId, new RejectRequest(ReviewerId(), request.Comment), ct));
 
     [HttpPost("{approvalItemId:guid}/edit")]
+    [Authorize(Roles = "Supervisor")]
     public async Task<ActionResult<ReviewActionResult>> Edit(Guid approvalItemId, [FromBody] ReviewEditBody request, CancellationToken ct)
         => Ok(await _service.EditAsync(approvalItemId,
             new EditRequest(ReviewerId(), request.Comment, request.EditedDecisionJson, request.EditedAmount), ct));
 
     [HttpPost("{approvalItemId:guid}/re-review")]
+    [Authorize(Roles = "Supervisor")]
     public async Task<ActionResult<ReviewActionResult>> ReReview(Guid approvalItemId, [FromBody] ReviewReReviewBody request, CancellationToken ct)
         => Ok(await _service.ReReviewAsync(approvalItemId, new ReReviewRequest(ReviewerId(), request.Comment), ct));
 
