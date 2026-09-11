@@ -1,5 +1,6 @@
 using System.Text.Json;
 
+using ClaimPilot.Application.Common;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Orchestration;
 using ClaimPilot.Domain.Enums;
@@ -51,7 +52,8 @@ public sealed class ExclusionAnalystAgent : IAgent
 
         // Use the LLM only to classify which exclusions are plausibly applicable,
         // strictly as language understanding. Each candidate is then verified via check_exclusion.
-        var exclusions = JsonSerializer.Deserialize<List<ExclusionCandidate>>(retrieveCall.OutputJson) ?? new();
+        var exclusions = (match.Exclusions ?? Array.Empty<PolicyExclusionLine>())
+            .Select(e => new ExclusionCandidate(e.Code, e.Name, e.Description)).ToList();
 
         var relevant = await SelectRelevantExclusionsAsync(ctx, exclusions, ct);
 
@@ -117,7 +119,7 @@ public sealed class ExclusionAnalystAgent : IAgent
         {
             var result = await _llm.CompleteAsync(system, user, null, ct);
             var body = ExtractJson(result.Text);
-            return JsonSerializer.Deserialize<List<ExclusionCandidate>>(body) ?? new List<ExclusionCandidate>();
+            return JsonExtraction.DeserializeArray<ExclusionCandidate>(body).ToList();
         }
         catch (JsonException)
         {

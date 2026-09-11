@@ -120,8 +120,9 @@ public sealed class ToolRegistryService : IToolRegistry
         var policyNumber = Get(p, "policy_number");
         var incidentStr = Get(p, "incident_date");
 
-        if (string.IsNullOrWhiteSpace(policyNumber) || !DateTime.TryParse(incidentStr, out var incidentDate))
+        if (string.IsNullOrWhiteSpace(policyNumber) || !DateTime.TryParse(incidentStr, out var incidentDateUnspecified))
             throw new DomainException("retrieve_policy_versioned requires policy_number and incident_date.");
+        var incidentDate = DateTime.SpecifyKind(incidentDateUnspecified, DateTimeKind.Utc);
 
         var policy = await _policies.GetByPolicyNumberAsync(policyNumber, ct)
             ?? throw new DomainException($"Policy '{policyNumber}' not found.");
@@ -129,11 +130,14 @@ public sealed class ToolRegistryService : IToolRegistry
             ?? throw new PolicyVersionNotFoundException(policyNumber, incidentDate);
 
         var coverage = await _policies.GetCoverageItemsAsync(version.Id, ct);
+        var exclusions = (await _policies.GetExclusionsAsync(version.Id, ct))
+            .Select(e => new PolicyExclusionLine(e.Code, e.Name, e.Description ?? string.Empty)).ToList();
 
         return new PolicyMatchResult(policy.Id, version.Id, version.Version, version.EffectiveDate,
             coverage.Select(c => new CoverageLine(c.Code, c.Name, c.Amount,
                 coverage.FirstOrDefault(x => x.Type == CoverageType.Deductible)?.Amount,
-                c.PercentageRate, c.Description ?? string.Empty)).ToList());
+                c.PercentageRate, c.Description ?? string.Empty)).ToList(),
+            exclusions);
     }
 
     private async Task<string> ListCoverageItemsAsync(IReadOnlyDictionary<string, string> p, CancellationToken ct)
@@ -223,6 +227,7 @@ public sealed class ToolRegistryService : IToolRegistry
     private async Task<Decision> SaveDraftAsync(Decision decision, CancellationToken ct)
     {
         _db.Decisions.Add(decision);
+        AttachIfDetached(decision.AdjudicationRun);
         await _db.SaveChangesAsync(ct);
         return decision;
     }
@@ -230,8 +235,15 @@ public sealed class ToolRegistryService : IToolRegistry
     private async Task<Anomaly> SaveAnomalyAsync(Anomaly anomaly, CancellationToken ct)
     {
         _db.Anomalies.Add(anomaly);
+        AttachIfDetached(anomaly.AdjudicationRun);
         await _db.SaveChangesAsync(ct);
         return anomaly;
+    }
+
+    private void AttachIfDetached(AdjudicationRun run)
+    {
+        if (run is not null && _db.Entry(run).State == EntityState.Detached)
+            _db.Attach(run);
     }
 
     private async Task<string> RecordAnomalyAsync(IReadOnlyDictionary<string, string> p, Guid runId, CancellationToken ct)

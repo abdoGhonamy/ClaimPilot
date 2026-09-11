@@ -1,8 +1,10 @@
 using System.Text.Json;
 
+using ClaimPilot.Application.Common;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Orchestration;
 using ClaimPilot.Domain.Enums;
+using ClaimPilot.Domain.Exceptions;
 using ClaimPilot.Domain.ValueObjects;
 
 namespace ClaimPilot.Application.Services.Agents;
@@ -16,14 +18,16 @@ namespace ClaimPilot.Application.Services.Agents;
 public sealed class AdjudicationDrafterAgent : IAgent
 {
     private readonly ILLMProvider _llm;
+    private readonly IToolRegistry _tools;
     private readonly OrchestrationEventSink _events;
 
     public AgentType AgentType => AgentType.AdjudicationDrafter;
     public string DisplayName => "Adjudication Drafter";
 
-    public AdjudicationDrafterAgent(ILLMProvider llm, OrchestrationEventSink events)
+    public AdjudicationDrafterAgent(ILLMProvider llm, IToolRegistry tools, OrchestrationEventSink events)
     {
         _llm = llm;
+        _tools = tools;
         _events = events;
     }
 
@@ -46,6 +50,16 @@ public sealed class AdjudicationDrafterAgent : IAgent
         };
         var json = JsonSerializer.Serialize(draft);
 
+        // Persist a DRAFT decision via the gated write tool. It is never final
+        // without human approval (IsFinal=false by contract in DraftAdjudicationAsync).
+        var draftCall = await _tools.ExecuteAsync(
+            ToolName.DraftAdjudication, AgentType.AdjudicationDrafter,
+            new Dictionary<string, string> { ["decision_json"] = json },
+            ctx.RunId, ctx.CorrelationId, ct);
+
+        if (!draftCall.Succeeded)
+            throw new DomainException($"Adjudication Drafter could not persist draft: {draftCall.Error}");
+
         await _events.Emit(ctx.RunId, ctx.CorrelationId, "agent_completed", DisplayName,
             null, json, ct);
 
@@ -53,6 +67,7 @@ public sealed class AdjudicationDrafterAgent : IAgent
         {
             Output = json,
             Success = true,
+            ToolCalls = new List<ToolCallRecord> { draftCall },
             RecommendsReview = true,
             Citations = computation.citations
         };
@@ -95,8 +110,7 @@ public sealed class AdjudicationDrafterAgent : IAgent
         var citations = Array.Empty<Citation>();
         if (!string.IsNullOrWhiteSpace(citationsText))
         {
-            var parsed = JsonSerializer.Deserialize<Citation[]>(citationsText);
-            if (parsed is not null) citations = parsed;
+            citations = JsonExtraction.DeserializeArray<Citation>(citationsText).ToArray();
         }
 
         return (payable, excluded, insufficient, citations);

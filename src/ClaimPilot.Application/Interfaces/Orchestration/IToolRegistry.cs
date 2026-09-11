@@ -29,9 +29,12 @@ public sealed record PolicyMatchResult(
     Guid VersionId,
     int Version,
     DateTime EffectiveDate,
-    IReadOnlyList<CoverageLine> CoverageItems);
+    IReadOnlyList<CoverageLine> CoverageItems,
+    IReadOnlyList<PolicyExclusionLine>? Exclusions = null);
 
 public sealed record CoverageLine(string Code, string Name, decimal? Limit, decimal? Deductible, decimal? Coinsurance, string Description);
+
+public sealed record PolicyExclusionLine(string Code, string Name, string Description);
 
 public sealed record ExclusionCheckResult(bool IsApplicable, string? Code, string? Name, string? Evidence);
 
