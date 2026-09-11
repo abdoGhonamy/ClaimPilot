@@ -83,9 +83,8 @@ public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole,
                     v => v == null ? null : new Pgvector.Vector(v),
                     v => v == null ? null : v.ToArray())
                 .HasColumnType("vector(768)");
-            e.HasIndex(x => x.ContentHash).IsUnique();
+            e.HasIndex(x => new { x.PolicyVersionId, x.ContentHash }).IsUnique();
             e.HasIndex(x => new { x.PolicyVersionId, x.Section });
-            e.HasIndex(x => x.ContentHash);
         });
 
         b.Entity<CoverageItem>(e =>
