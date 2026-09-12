@@ -27,6 +27,9 @@ public interface IClaimRepository
     Task AddLetterAsync(DecisionLetter letter, CancellationToken ct);
     Task SaveChangesAsync(CancellationToken ct);
     Task AddAsync(Claim claim, CancellationToken ct);
+    Task<string> GenerateClaimNumberAsync(CancellationToken ct);
+    Task<ClaimDocument> AddDocumentAsync(ClaimDocument document, CancellationToken ct);
+    Task<bool> HasDocumentsAsync(Guid claimId, CancellationToken ct);
 }
 
 public interface IChunkRepository
