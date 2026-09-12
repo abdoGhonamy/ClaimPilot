@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 using ClaimPilot.Application.Interfaces;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Repositories;
@@ -131,7 +133,10 @@ public sealed class FakeLLMProvider : ILLMProvider
     public string ModelName => "stub-model";
     public string? NextText { get; set; } = "plain stub answer";
     public int CompleteCalls { get; private set; }
+
+#pragma warning disable CS0067 // event required by ILLMProvider; deliberately never raised in the stub
     public event UsageRecordedHandler? UsageRecorded;
+#pragma warning restore CS0067
 
     public Task<LLMResult> CompleteAsync(
         string systemPrompt,
@@ -148,7 +153,7 @@ public sealed class FakeLLMProvider : ILLMProvider
         string systemPrompt,
         string userContent,
         IReadOnlyList<ChatMessage>? history,
-        CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.Yield();
         yield return new LLMResult(NextText ?? string.Empty, 10, 10, ModelName, ProviderName);

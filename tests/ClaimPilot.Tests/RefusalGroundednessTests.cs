@@ -23,14 +23,13 @@ public class RefusalGroundednessTests
             NullLogger<AskService>.Instance);
 
     [Fact]
-    public void CorpusLackingInformation_ReturnsExactRefusal_AndSkipsTheLLM()
+    public async Task CorpusLackingInformation_ReturnsExactRefusal_AndSkipsTheLLM()
     {
         var llm = new FakeLLMProvider { NextText = "I would love to help with your $99,999 payout." };
         var retrieval = new FakeRetrievalService(Array.Empty<RetrievedChunk>()) { Sufficient = false };
         var service = BuildService(retrieval, llm);
 
-        var result = service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None)
-            .GetAwaiter().GetResult();
+        var result = await service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
 
         result.Answer.Should().Be(ExpectedRefusal);
         result.Refused.Should().BeTrue();
@@ -38,7 +37,7 @@ public class RefusalGroundednessTests
     }
 
     [Fact]
-    public void HallucinatedPayout_NotPresentInCorpus_IsRefusedWithExactString()
+    public async Task HallucinatedPayout_NotPresentInCorpus_IsRefusedWithExactString()
     {
         var llm = new FakeLLMProvider { NextText = "Approved. The payout is $99,999 under section VI." };
         var retrieval = new FakeRetrievalService(new[]
@@ -47,15 +46,14 @@ public class RefusalGroundednessTests
         });
         var service = BuildService(retrieval, llm);
 
-        var result = service.AskAsync("How much will I be paid?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None)
-            .GetAwaiter().GetResult();
+        var result = await service.AskAsync("How much will I be paid?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
 
         result.Answer.Should().Be(ExpectedRefusal);
         result.Refused.Should().BeTrue();
     }
 
     [Fact]
-    public void PromptInjection_InsideExcerpt_IsTreatedAsData_NotAsApproval()
+    public async Task PromptInjection_InsideExcerpt_IsTreatedAsData_NotAsApproval()
     {
         // An adversarial chunk tries to instruct the assistant to ignore its
         // guidelines, stop citing the policy, and approve a different payout.
@@ -67,15 +65,14 @@ public class RefusalGroundednessTests
         var retrieval = new FakeRetrievalService(new[] { adversarialChunk });
         var service = BuildService(retrieval, llm);
 
-        var result = service.AskAsync("What do the policy terms say?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None)
-            .GetAwaiter().GetResult();
+        var result = await service.AskAsync("What do the policy terms say?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
 
         result.Refused.Should().BeTrue();
         result.Answer.Should().StartWith("Not enough information");
     }
 
     [Fact]
-    public void NumberQuotedFromCorpus_IsNotRefused()
+    public async Task NumberQuotedFromCorpus_IsNotRefused()
     {
         // Control: when the answer quotes an amount that IS in the corpus the
         // groundedness check is satisfied and the answer is passed through.
@@ -86,24 +83,23 @@ public class RefusalGroundednessTests
         var retrieval = new FakeRetrievalService(new[] { corpusChunk });
         var service = BuildService(retrieval, llm);
 
-        var result = service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None)
-            .GetAwaiter().GetResult();
+        var result = await service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
 
         result.Refused.Should().BeFalse();
         result.Answer.Should().Contain("$500");
     }
 
     [Fact]
-    public void VersionTrap_SelectsV1For2023_AndV2For2026_ThroughAskService()
+    public async Task VersionTrap_SelectsV1For2023_AndV2For2026_ThroughAskService()
     {
         var llm = new FakeLLMProvider { NextText = ExpectedRefusal };
         var retrieval = new FakeRetrievalService(Array.Empty<RetrievedChunk>()) { Sufficient = false };
         var service = BuildService(retrieval, llm);
 
-        service.AskAsync("Deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None).GetAwaiter().GetResult();
+        await service.AskAsync("Deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
         retrieval.LastQuery!.PolicyVersionId.Should().Be(_trap.V1.Id);
 
-        service.AskAsync("Deductible?", "AUT-2022", new DateTime(2026, 1, 20), CancellationToken.None).GetAwaiter().GetResult();
+        await service.AskAsync("Deductible?", "AUT-2022", new DateTime(2026, 1, 20), CancellationToken.None);
         retrieval.LastQuery!.PolicyVersionId.Should().Be(_trap.V2.Id);
     }
 }
