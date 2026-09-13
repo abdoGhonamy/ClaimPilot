@@ -327,7 +327,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
             AllowedTools = AgentToolMap.AllowedFor(agent.AgentType),
             MaxIterations = _options.MaxIterations,
             CorrelationId = correlationId,
-            State = BuildAgentState(state)
+            State = await BuildAgentStateAsync(state, claim.Id, ct)
         };
 
         var runRecord = new AgentRun
@@ -377,12 +377,13 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         throw new DomainException($"Agent '{agent.DisplayName}' failed after retries: {lastError?.Message}");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildAgentState(RequestState state)
+    private async Task<IReadOnlyDictionary<string, string>> BuildAgentStateAsync(RequestState state, Guid claimId, CancellationToken ct)
     {
+        var hasDocuments = await _claims.HasDocumentsAsync(claimId, ct);
         var dict = new Dictionary<string, string>
         {
             ["policy_limit"] = state.PolicyLimit?.ToString() ?? string.Empty,
-            ["has_documents"] = "false"
+            ["has_documents"] = hasDocuments ? "true" : "false"
         };
         if (state.Computation is { } c)
         {
