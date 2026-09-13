@@ -18,6 +18,7 @@ public static class DependencyInjection
         services.Configure<OrchestratorOptions>(configuration.GetSection("Orchestrator"));
         services.Configure<AssignmentOptions>(configuration.GetSection("Assignment"));
         services.Configure<SlaRuleSet>(configuration.GetSection("Sla"));
+        services.Configure<ApprovalAuthorityOptions>(configuration.GetSection(ApprovalAuthorityOptions.SectionName));
 
         services.AddSingleton<OrchestrationEventSink>();
 
@@ -31,6 +32,7 @@ public static class DependencyInjection
         });
         services.AddScoped<IAssignmentService, AssignmentService>();
         services.AddScoped<IApprovalService, ApprovalService>();
+        services.AddScoped<IAuthorityService, AuthorityService>();
         services.AddScoped<IReviewStatisticsService, ReviewStatisticsService>();
         services.AddScoped<AskService>();
 
