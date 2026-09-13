@@ -1,7 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 using ClaimPilot.Application.Interfaces;
 using ClaimPilot.Application.Interfaces.AI;
+using ClaimPilot.Application.Interfaces.Documents;
+using ClaimPilot.Application.Interfaces.Orchestration;
 using ClaimPilot.Application.Interfaces.Repositories;
 using ClaimPilot.Application.Interfaces.Retrieval;
 using ClaimPilot.Application.Interfaces.Trace;
@@ -246,17 +249,126 @@ public sealed class FakeApprovalRepository : IApprovalRepository
 
 public sealed class FakeClaimRepository : IClaimRepository
 {
-    public Task<Claim?> GetByNumberAsync(string claimNumber, CancellationToken ct) => Task.FromResult<Claim?>(null);
-    public Task<Claim?> GetByIdAsync(Guid id, CancellationToken ct) => Task.FromResult<Claim?>(null);
+    public List<Claim> Claims { get; } = new();
+    public List<ClaimDocument> Documents { get; } = new();
+    public string? NextClaimNumber { get; set; }
+
+    public Task<Claim?> GetByNumberAsync(string claimNumber, CancellationToken ct)
+        => Task.FromResult(Claims.FirstOrDefault(c => c.ClaimNumber == claimNumber));
+
+    public Task<Claim?> GetByIdAsync(Guid id, CancellationToken ct)
+        => Task.FromResult(Claims.FirstOrDefault(c => c.Id == id));
+
     public Task<IReadOnlyList<Claim>> GetAllAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<Claim>>(new List<Claim>());
+        => Task.FromResult<IReadOnlyList<Claim>>(Claims.ToList());
+
     public Task<AdjudicationRun> CreateRunAsync(Guid claimId, CancellationToken ct)
-        => throw new NotSupportedException();
-    public Task<AdjudicationRun?> GetRunAsync(Guid runId, CancellationToken ct) => Task.FromResult<AdjudicationRun?>(null);
+    {
+        var claim = Claims.FirstOrDefault(c => c.Id == claimId)
+            ?? throw new NotSupportedException();
+        var run = new AdjudicationRun
+        {
+            Id = Guid.NewGuid(),
+            ClaimId = claimId,
+            Claim = claim,
+            Status = RunStatus.Running,
+            StartedAt = DateTime.UtcNow
+        };
+        claim.Runs.Add(run);
+        return Task.FromResult(run);
+    }
+
+    public Task<AdjudicationRun?> GetRunAsync(Guid runId, CancellationToken ct)
+        => Task.FromResult(Claims.SelectMany(c => c.Runs).FirstOrDefault(r => r.Id == runId));
+
     public Task<Decision?> GetDecisionForRunAsync(Guid runId, CancellationToken ct) => Task.FromResult<Decision?>(null);
     public Task AddLetterAsync(DecisionLetter letter, CancellationToken ct) => Task.CompletedTask;
     public Task SaveChangesAsync(CancellationToken ct) => Task.CompletedTask;
-    public Task AddAsync(Claim claim, CancellationToken ct) => Task.CompletedTask;
+
+    public Task AddAsync(Claim claim, CancellationToken ct)
+    {
+        Claims.Add(claim);
+        return Task.CompletedTask;
+    }
+
+    public Task<string> GenerateClaimNumberAsync(CancellationToken ct)
+        => Task.FromResult(NextClaimNumber ?? $"CLAIM-{DateTime.UtcNow.Year}-{Claims.Count + 1:D3}");
+
+    public Task<ClaimDocument> AddDocumentAsync(ClaimDocument document, CancellationToken ct)
+    {
+        Documents.Add(document);
+        var claim = Claims.FirstOrDefault(c => c.Id == document.ClaimId);
+        claim?.Documents.Add(document);
+        return Task.FromResult(document);
+    }
+
+    public Task<bool> HasDocumentsAsync(Guid claimId, CancellationToken ct)
+        => Task.FromResult(Documents.Any(d => d.ClaimId == claimId));
+}
+
+public sealed class FakeToolRegistry : IToolRegistry
+{
+    public List<ToolCallRecord> Calls { get; } = new();
+    public IReadOnlyList<CoverageLine> CoverageItems { get; init; } = Array.Empty<CoverageLine>();
+    public IReadOnlyList<PolicyExclusionLine> Exclusions { get; init; } = Array.Empty<PolicyExclusionLine>();
+
+    public IReadOnlyList<ToolDefinition> Definitions => Array.Empty<ToolDefinition>();
+
+    public ToolDefinition GetDefinition(ToolName name) =>
+        new() { Name = name, Description = name.ToString() };
+
+    public Task<ToolCallRecord> ExecuteAsync(
+        ToolName name,
+        AgentType agentType,
+        IReadOnlyDictionary<string, string> parameters,
+        Guid runId,
+        string? correlationId,
+        CancellationToken ct)
+    {
+        var outputJson = name switch
+        {
+            ToolName.RetrievePolicyVersioned => JsonSerializer.Serialize(new PolicyMatchResult(
+                Guid.NewGuid(), Guid.NewGuid(), 1, new DateTime(2022, 1, 1),
+                CoverageItems, Exclusions)),
+            ToolName.ListCoverageItems => JsonSerializer.Serialize(CoverageItems),
+            ToolName.CheckExclusion => JsonSerializer.Serialize(new ExclusionCheckResult(false, null, null, null)),
+            ToolName.RecordAnomaly => JsonSerializer.Serialize(new { written = true }),
+            ToolName.DraftAdjudication => JsonSerializer.Serialize(new DraftAdjudicationResult(true, "pending-1", null)),
+            _ => "{}"
+        };
+
+        var record = new ToolCallRecord
+        {
+            Id = Guid.NewGuid(),
+            Tool = name,
+            InputJson = JsonSerializer.Serialize(parameters),
+            OutputJson = outputJson,
+            Succeeded = true,
+            StartedAt = DateTime.UtcNow,
+            EndedAt = DateTime.UtcNow
+        };
+        Calls.Add(record);
+        return Task.FromResult(record);
+    }
+}
+
+public sealed class FakeStorageService : IStorageService
+{
+    public List<(Guid ClaimId, Guid DocumentId, string Extension)> Saved { get; } = new();
+    public long SizeBytes { get; init; } = 42;
+
+    public Task<StoredFile> SaveAsync(Guid claimId, Guid documentId, string extension, Stream content, CancellationToken ct)
+    {
+        Saved.Add((claimId, documentId, extension));
+        var relative = Path.Combine(claimId.ToString("N"), $"{documentId:N}{extension}");
+        return Task.FromResult(new StoredFile(relative, SizeBytes));
+    }
+}
+
+public sealed class NullTraceViewBuilder : IRunTraceViewBuilder
+{
+    public Task<RunTraceView> BuildAsync(string runId, CancellationToken ct)
+        => Task.FromResult<RunTraceView>(null!);
 }
 
 public static class Chunk
