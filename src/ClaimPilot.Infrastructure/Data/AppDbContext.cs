@@ -185,6 +185,7 @@ public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole,
             e.HasKey(x => x.Id);
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Priority).HasConversion<string>().HasMaxLength(32);
+            e.Property(x => x.AssignedTo).HasConversion<string>().HasMaxLength(32);
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.SLADeadline);
             e.HasIndex(x => x.AssignedTo);
