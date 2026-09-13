@@ -96,7 +96,7 @@ public sealed class SlaEscalationWorker : BackgroundService
 
                     case "director":
                         await approvalService.EscalateAsync(item.Id,
-                            new EscalateRequest("sla-worker", "Late past SLA deadline; escalated to director."), ct);
+                            new EscalateRequest("sla-worker", Array.Empty<string>(), "Late past SLA deadline; escalated to director."), ct);
                         break;
                 }
             }

@@ -106,14 +106,38 @@ public class ApprovalServiceStateMachineTests
     }
 
     [Fact]
-    public async Task Escalate_MarksEscalated_AndForwardsToDirector()
+    public async Task Escalate_ByAdjuster_ForwardsToSupervisor()
     {
         var item = NewPendingItem();
 
-        var result = await _service.EscalateAsync(item.Id, new EscalateRequest("adjuster", "need director"), CancellationToken.None);
+        var result = await _service.EscalateAsync(item.Id,
+            new EscalateRequest("adjuster", new[] { "Adjuster" }, "need a supervisor"), CancellationToken.None);
+
+        result.NewStatus.Should().Be(ApprovalStatus.Escalated);
+        item.AssignedTo.Should().Be("supervisor");
+    }
+
+    [Fact]
+    public async Task Escalate_BySupervisor_ForwardsToDirector()
+    {
+        var item = NewPendingItem();
+
+        var result = await _service.EscalateAsync(item.Id,
+            new EscalateRequest("supervisor", new[] { "Supervisor", "Adjuster" }, "need a director"), CancellationToken.None);
 
         result.NewStatus.Should().Be(ApprovalStatus.Escalated);
         item.AssignedTo.Should().Be("director");
+    }
+
+    [Fact]
+    public async Task Escalate_NonPendingItem_Throws()
+    {
+        var item = NewPendingItem(status: ApprovalStatus.Approved);
+
+        var act = async () => await _service.EscalateAsync(item.Id,
+            new EscalateRequest("adjuster", new[] { "Adjuster" }, "too late"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidStateTransitionException>();
     }
 
     [Fact]

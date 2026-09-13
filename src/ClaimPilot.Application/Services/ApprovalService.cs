@@ -170,9 +170,16 @@ public sealed class ApprovalService : IApprovalService
     {
         var item = await GetOrThrowAsync(id, ct);
 
+        RequireState(item, ApprovalStatus.Pending);
+
+        var callerRoles = req.ReviewerRoles ?? Array.Empty<string>();
+        var nextAssignee = callerRoles.Contains("Supervisor") || callerRoles.Contains("Director")
+            ? "director"
+            : callerRoles.Contains("Adjuster") ? "supervisor" : "director";
+
         var before = item.AssignedTo;
         item.Status = ApprovalStatus.Escalated;
-        item.AssignedTo = "director";
+        item.AssignedTo = nextAssignee;
         await AppendHistoryAsync(item, ApprovalAction.Escalated, req.ReviewerId, req.Comment,
             before, item.AssignedTo, ct);
 
