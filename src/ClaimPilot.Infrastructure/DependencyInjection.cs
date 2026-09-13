@@ -146,7 +146,7 @@ internal sealed class ReviewDataProvider : IReviewDataProvider
         var items = await _approvals.QueryAsync(null, null, null, ct);
         return items
             .Where(i => (!from.HasValue || i.CreatedAt >= from) && (!to.HasValue || i.CreatedAt <= to))
-            .Select(i => new StatisticRow(i.Status, i.CreatedAt, i.ReviewedAt, i.SLADeadline, i.AssignedTo))
+            .Select(i => new StatisticRow(i.Status, i.CreatedAt, i.ReviewedAt, i.SLADeadline, i.AssignedTo?.ToString()))
             .ToList();
     }
 }

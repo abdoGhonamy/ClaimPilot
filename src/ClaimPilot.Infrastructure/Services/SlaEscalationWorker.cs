@@ -1,36 +1,32 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
-using ClaimPilot.Application.Interfaces;
-using ClaimPilot.Application.Interfaces.Assignment;
-using ClaimPilot.Application.Interfaces.Repositories;
 using ClaimPilot.Application.Interfaces.Review;
 using ClaimPilot.Domain.Enums;
+using ClaimPilot.Infrastructure.Data;
 
 namespace ClaimPilot.Infrastructure.Services;
 
 /// <summary>
-/// Background worker that enforces SLA escalation rules. Runs on a timer,
-/// checks pending unassigned/unreviewed/late items and escalates according to
-/// the configured SlaRuleSet. Rules are configuration, never hardcoded here.
+/// Background worker that reassigns stalled approval items:
+/// rule 1 — an Adjuster-assigned item pending more than 8h moves to Supervisor;
+/// rule 2 — a Supervisor-assigned item pending more than 16h moves to Director;
+/// rule 3 — an unassigned item older than 2h is routed by priority.
+/// Reassignment updates the assignee and resets AssignedAt via IApprovalService.
 /// </summary>
 public sealed class SlaEscalationWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IOptions<SlaRuleSet> _rules;
     private readonly ILogger<SlaEscalationWorker> _logger;
     private readonly IRedisCache _redis;
 
     public SlaEscalationWorker(
         IServiceScopeFactory scopeFactory,
-        IOptions<SlaRuleSet> rules,
         IRedisCache redis,
         ILogger<SlaEscalationWorker> logger)
     {
         _scopeFactory = scopeFactory;
-        _rules = rules;
         _redis = redis;
         _logger = logger;
     }
@@ -61,7 +57,7 @@ public sealed class SlaEscalationWorker : BackgroundService
 
     private async Task SweepAsync(CancellationToken ct)
     {
-        // Simple coordination lock via Redis to avoid duplicate escalations in multi-instance runs.
+        // Simple coordination lock via Redis to avoid duplicate reassignments in multi-instance runs.
         var lockKey = "claimpilot:sla:sweep";
         var acquired = await _redis.SetIfNotExistsAsync(lockKey, TimeSpan.FromMinutes(1));
         if (!acquired) return;
@@ -69,35 +65,41 @@ public sealed class SlaEscalationWorker : BackgroundService
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var approvals = scope.ServiceProvider.GetRequiredService<IApprovalRepository>();
-            var sla = scope.ServiceProvider.GetRequiredService<ISlaPolicy>();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var approvalService = scope.ServiceProvider.GetRequiredService<IApprovalService>();
-            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
 
-            var pending = await approvals.QueryAsync(ApprovalStatus.Pending, null, null, ct);
+            var pending = db.ApprovalItems.Where(i => i.Status == ApprovalStatus.Pending).ToList();
             var now = DateTime.UtcNow;
 
             foreach (var item in pending)
             {
-                var action = sla.EvaluateEscalation(item.CreatedAt, item.ReviewedAt, item.AssignedTo, now);
+                var assignedSince = item.AssignedAt ?? item.CreatedAt;
+                var elapsed = now - assignedSince;
+                AssigneeRole? nextAssignee = null;
 
-                switch (action)
+                if (item.AssignedTo == AssigneeRole.Adjuster && elapsed > TimeSpan.FromHours(8))
                 {
-                    case "pool":
-                        // Move to pool: clear assignment so least-loaded routing picks it up.
-                        await approvalService.AssignAsync(item.Id,
-                            new AssignRequest("pool", ReviewerId: "sla-worker"), ct);
-                        break;
+                    nextAssignee = AssigneeRole.Supervisor;
+                }
+                else if (item.AssignedTo == AssigneeRole.Supervisor && elapsed > TimeSpan.FromHours(16))
+                {
+                    nextAssignee = AssigneeRole.Director;
+                }
+                else if (item.AssignedTo is null && elapsed > TimeSpan.FromHours(2))
+                {
+                    nextAssignee = item.Priority switch
+                    {
+                        Priority.Critical => AssigneeRole.Director,
+                        Priority.High => AssigneeRole.Supervisor,
+                        _ => AssigneeRole.Adjuster
+                    };
+                }
 
-                    case "supervisor":
-                        await approvalService.AssignAsync(item.Id,
-                            new AssignRequest("supervisor", ReviewerId: "sla-worker"), ct);
-                        break;
-
-                    case "director":
-                        await approvalService.EscalateAsync(item.Id,
-                            new EscalateRequest("sla-worker", Array.Empty<string>(), "Late past SLA deadline; escalated to director."), ct);
-                        break;
+                if (nextAssignee.HasValue)
+                {
+                    await approvalService.AssignAsync(item.Id,
+                        new AssignRequest(nextAssignee.Value, "sla-worker",
+                            "SLA rule triggered; item reassigned."), ct);
                 }
             }
         }

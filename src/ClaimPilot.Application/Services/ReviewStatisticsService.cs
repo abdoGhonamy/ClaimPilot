@@ -49,7 +49,7 @@ public sealed class ReviewStatisticsService : IReviewStatisticsService
         }
 
         var perAdjuster = resolved
-            .GroupBy(i => i.AssignedTo ?? "unassigned")
+            .GroupBy(i => i.AssignedTo?.ToString() ?? "unassigned")
             .Select(g => new PerAdjusterStatistic(
                 g.Key,
                 g.Count(),
