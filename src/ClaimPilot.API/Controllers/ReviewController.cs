@@ -68,7 +68,7 @@ public sealed class ReviewController : ControllerBase
     [HttpPost("{approvalItemId:guid}/assign")]
     [Authorize(Roles = "Supervisor,Director")]
     public async Task<ActionResult<ReviewActionResult>> Assign(Guid approvalItemId, [FromBody] ReviewAssignBody request, CancellationToken ct)
-        => Ok(await _service.AssignAsync(approvalItemId, new AssignRequest(request.AssigneeId, ReviewerId(), request.Comment), ct));
+        => Ok(await _service.AssignAsync(approvalItemId, new AssignRequest(request.Assignee, ReviewerId(), request.Comment), ct));
 
     [HttpPost("{approvalItemId:guid}/escalate")]
     [Authorize(Roles = "Adjuster,Supervisor,Director")]
