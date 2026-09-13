@@ -110,3 +110,10 @@ public enum CoverageType
     Benefit = 4,
     Condition = 5
 }
+
+public enum AssigneeRole
+{
+    Adjuster = 1,
+    Supervisor = 2,
+    Director = 3
+}
