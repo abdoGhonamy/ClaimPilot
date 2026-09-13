@@ -8,6 +8,7 @@ using ClaimPilot.Application.Interfaces.Adjudication;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Orchestration;
 using ClaimPilot.Application.Interfaces.Repositories;
+using ClaimPilot.Application.Interfaces.Review;
 using ClaimPilot.Application.Interfaces.Trace;
 using ClaimPilot.Application.Services.Agents;
 using ClaimPilot.Domain.Entities;
@@ -42,6 +43,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
     private readonly IClaimRepository _claims;
     private readonly IAdjudicationEngine _engine;
     private readonly IApprovalRepository _approvals;
+    private readonly IAuthorityService _authority;
     private readonly ITraceService _trace;
     private readonly IAuditService _audit;
     private readonly IUsageTracker _usage;
@@ -59,6 +61,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         IClaimRepository claims,
         IAdjudicationEngine engine,
         IApprovalRepository approvals,
+        IAuthorityService authority,
         ITraceService trace,
         IAuditService audit,
         IUsageTracker usage,
@@ -74,6 +77,7 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
         _claims = claims;
         _engine = engine;
         _approvals = approvals;
+        _authority = authority;
         _trace = trace;
         _audit = audit;
         _usage = usage;
@@ -194,6 +198,8 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
                 Status = ApprovalStatus.Pending,
                 Priority = ComputePriority(claim, state.PolicyLimit),
                 SLADeadline = ComputeDeadline(ComputePriority(claim, state.PolicyLimit)),
+                AssignedTo = AssignmentRouter.Compute(ComputePriority(claim, state.PolicyLimit), proposedAmount, _authority),
+                AssignedAt = DateTime.UtcNow,
                 Title = $"Decision required — {claim.ClaimNumber}",
                 Summary = draftResult.Result.Output
             };
