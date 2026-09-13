@@ -6,6 +6,7 @@ using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Documents;
 using ClaimPilot.Application.Interfaces.Orchestration;
 using ClaimPilot.Application.Interfaces.Repositories;
+using ClaimPilot.Application.Interfaces.Review;
 using ClaimPilot.Application.Interfaces.Retrieval;
 using ClaimPilot.Application.Interfaces.Trace;
 using ClaimPilot.Application.Services;
@@ -400,4 +401,18 @@ public static class Chunk
             DenseRank = 1,
             KeywordRank = 1
         };
+}
+public sealed class FakeApprovalQueueReader : IApprovalQueueReader
+{
+    private readonly Dictionary<Guid, ApprovalItemDetail> _items = new();
+    private readonly List<ApprovalItemView> _views = new();
+
+    public void AddItem(ApprovalItemDetail item) => _items[item.Id] = item;
+    public void AddView(ApprovalItemView item) => _views.Add(item);
+
+    public Task<IReadOnlyList<ApprovalItemView>> GetQueueAsync(ReviewQueueFilter filter, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ApprovalItemView>>(_views.ToList());
+
+    public Task<ApprovalItemDetail?> GetAsync(Guid approvalItemId, CancellationToken ct)
+        => Task.FromResult(_items.TryGetValue(approvalItemId, out var item) ? item : null);
 }
