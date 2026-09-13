@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 using System.Security.Claims;
@@ -34,7 +36,7 @@ public class ApprovalAuthorityFilterTests
         return new ClaimsPrincipal(identity);
     }
 
-    private static ApprovalItemDetail Item(Guid id, decimal amount) => new(
+    private static ApprovalItemDetail Item(Guid id, decimal amount, string? assignedTo = "Adjuster") => new(
         id,
         "Decision required — CLAIM-2024-070",
         "{}",
@@ -43,7 +45,7 @@ public class ApprovalAuthorityFilterTests
         ApprovalStatus.Pending,
         Priority.High,
         null,
-        "supervisor",
+        assignedTo,
         "{}",
         "{}",
         null,
@@ -64,6 +66,8 @@ public class ApprovalAuthorityFilterTests
         http.RequestServices = new ServiceCollection()
             .AddSingleton<IApprovalQueueReader>(reader)
             .AddSingleton<IAuthorityService>(Authority)
+            .AddSingleton<ILogger<RequireApprovalAuthorityAttribute>>(
+                NullLogger<RequireApprovalAuthorityAttribute>.Instance)
             .BuildServiceProvider();
 
         var actionContext = new ActionContext(http, new RouteData(), new ActionDescriptor());
@@ -87,9 +91,9 @@ public class ApprovalAuthorityFilterTests
     }
 
     [Fact]
-    public async Task Viewer_Forbidden()
+    public async Task PrincipalWithoutRoles_Forbidden()
     {
-        var context = await RunAsync(Principal("Viewer"), routeId: null, item: null, AuthApprovalAction.Approve);
+        var context = await RunAsync(new ClaimsPrincipal(new ClaimsIdentity("test")), routeId: null, item: null, AuthApprovalAction.Approve);
 
         context.Result.Should().BeOfType<ForbidResult>();
     }
@@ -114,7 +118,7 @@ public class ApprovalAuthorityFilterTests
     [InlineData(5_000)]
     public async Task Adjuster_WithinThreshold_Allowed(int amount)
     {
-        var item = Item(Guid.NewGuid(), amount);
+        var item = Item(Guid.NewGuid(), amount, "Adjuster");
         var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Approve);
 
         context.Result.Should().BeNull();
@@ -123,7 +127,7 @@ public class ApprovalAuthorityFilterTests
     [Fact]
     public async Task Adjuster_OverThreshold_ForbiddenWithEscalationHint()
     {
-        var item = Item(Guid.NewGuid(), 50_000m);
+        var item = Item(Guid.NewGuid(), 50_000m, "Adjuster");
         var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Approve);
 
         var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
@@ -132,9 +136,9 @@ public class ApprovalAuthorityFilterTests
     }
 
     [Fact]
-    public async Task Supervisor_OverAdjusterThreshold_Allowed()
+    public async Task Supervisor_OnOwnItem_OverAdjusterThreshold_Allowed()
     {
-        var item = Item(Guid.NewGuid(), 50_000m);
+        var item = Item(Guid.NewGuid(), 50_000m, "Supervisor");
         var context = await RunAsync(Principal("Adjuster", "Supervisor"), item.Id.ToString(), item, AuthApprovalAction.Approve);
 
         context.Result.Should().BeNull();
@@ -143,7 +147,7 @@ public class ApprovalAuthorityFilterTests
     [Fact]
     public async Task Supervisor_OverSupervisorThreshold_Forbidden()
     {
-        var item = Item(Guid.NewGuid(), 500_000m);
+        var item = Item(Guid.NewGuid(), 500_000m, "Supervisor");
         var context = await RunAsync(Principal("Adjuster", "Supervisor"), item.Id.ToString(), item, AuthApprovalAction.Approve);
 
         var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
@@ -153,7 +157,7 @@ public class ApprovalAuthorityFilterTests
     [Fact]
     public async Task Director_CanApproveAnyValidAmount()
     {
-        var item = Item(Guid.NewGuid(), 999_999_999m);
+        var item = Item(Guid.NewGuid(), 999_999_999m, "Director");
         var context = await RunAsync(Principal("Adjuster", "Supervisor", "Director"), item.Id.ToString(), item, AuthApprovalAction.Approve);
 
         context.Result.Should().BeNull();
@@ -162,8 +166,68 @@ public class ApprovalAuthorityFilterTests
     [Fact]
     public async Task Reject_SkipsAmountCheck()
     {
-        var item = Item(Guid.NewGuid(), 50_000m);
+        var item = Item(Guid.NewGuid(), 50_000m, "Adjuster");
         var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Reject);
+
+        context.Result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HigherRole_CannotBypassAssigneeRule()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, "Adjuster");
+        var context = await RunAsync(Principal("Supervisor", "Director"), item.Id.ToString(), item, AuthApprovalAction.Approve);
+
+        var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
+        result.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        DeniedDetails(context).Detail.Should().Contain("This item is assigned to a Adjuster");
+    }
+
+    [Fact]
+    public async Task WrongAssigneeRole_ForbiddenWithDetail()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, "Supervisor");
+        var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Approve);
+
+        var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
+        result.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        DeniedDetails(context).Detail.Should().Be("This item is assigned to a Supervisor. Only users with that role can act on it.");
+    }
+
+    [Fact]
+    public async Task UnassignedItem_Conflict()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, null);
+        var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Approve);
+
+        var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
+        result.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+    }
+
+    [Fact]
+    public async Task Reject_StillGatedByAssignee()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, "Adjuster");
+        var context = await RunAsync(Principal("Supervisor"), item.Id.ToString(), item, AuthApprovalAction.Reject);
+
+        var result = context.Result.Should().BeOfType<ObjectResult>().Subject;
+        result.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task Assign_RequiresSupervisorOrDirector()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, null);
+        var context = await RunAsync(Principal("Adjuster"), item.Id.ToString(), item, AuthApprovalAction.Assign);
+
+        context.Result.Should().BeOfType<ForbidResult>();
+    }
+
+    [Fact]
+    public async Task Assign_Supervisor_Allowed()
+    {
+        var item = Item(Guid.NewGuid(), 5_000m, null);
+        var context = await RunAsync(Principal("Supervisor"), item.Id.ToString(), item, AuthApprovalAction.Assign);
 
         context.Result.Should().BeNull();
     }

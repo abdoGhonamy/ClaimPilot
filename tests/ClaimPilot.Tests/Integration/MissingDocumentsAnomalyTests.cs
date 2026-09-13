@@ -39,6 +39,7 @@ public sealed class MissingDocumentsAnomalyTests
             claims,
             new DeterministicAdjudicationEngine(),
             new FakeApprovalRepository(),
+            new FakeAuthorityService(),
             new FakeTraceService(),
             new FakeAuditService(),
             new FakeUsageTracker(),

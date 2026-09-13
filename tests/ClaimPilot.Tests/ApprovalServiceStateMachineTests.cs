@@ -114,7 +114,7 @@ public class ApprovalServiceStateMachineTests
             new EscalateRequest("adjuster", new[] { "Adjuster" }, "need a supervisor"), CancellationToken.None);
 
         result.NewStatus.Should().Be(ApprovalStatus.Escalated);
-        item.AssignedTo.Should().Be("supervisor");
+        item.AssignedTo.Should().Be(AssigneeRole.Supervisor);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class ApprovalServiceStateMachineTests
             new EscalateRequest("supervisor", new[] { "Supervisor", "Adjuster" }, "need a director"), CancellationToken.None);
 
         result.NewStatus.Should().Be(ApprovalStatus.Escalated);
-        item.AssignedTo.Should().Be("director");
+        item.AssignedTo.Should().Be(AssigneeRole.Director);
     }
 
     [Fact]

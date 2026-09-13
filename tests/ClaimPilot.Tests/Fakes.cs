@@ -13,6 +13,7 @@ using ClaimPilot.Application.Services;
 using ClaimPilot.Domain.Entities;
 using ClaimPilot.Domain.Enums;
 using ClaimPilot.Domain.ValueObjects;
+using ClaimsPrincipal = System.Security.Claims.ClaimsPrincipal;
 
 namespace ClaimPilot.Tests;
 
@@ -193,6 +194,21 @@ public sealed class FakeUsageTracker : IUsageTracker
         => Task.FromResult(0m);
 }
 
+public sealed class FakeAuthorityService : IAuthorityService
+{
+    public Task<bool> CanApproveAsync(ClaimsPrincipal user, decimal amount, string action, CancellationToken ct)
+        => Task.FromResult(true);
+
+    public decimal GetThresholdForUser(ClaimsPrincipal user) => 1_000_000_000m;
+
+    public decimal GetThresholdForRole(string role) => role switch
+    {
+        "Adjuster" => 10_000m,
+        "Supervisor" => 100_000m,
+        _ => 1_000_000_000m
+    };
+}
+
 public sealed class FakeAuditService : IAuditService
 {
     public List<AuditLogEntry> Entries { get; } = new();
@@ -243,7 +259,7 @@ public sealed class FakeApprovalRepository : IApprovalRepository
     }
 
     public Task<int> FindUserQueueCountAsync(string assigneeId, CancellationToken ct)
-        => Task.FromResult(_items.Count(i => i.AssignedTo == assigneeId && i.Status == ApprovalStatus.Pending));
+        => Task.FromResult(_items.Count(i => i.AssignedTo?.ToString() == assigneeId && i.Status == ApprovalStatus.Pending));
 
     public Task SaveChangesAsync(CancellationToken ct) => Task.CompletedTask;
 }
