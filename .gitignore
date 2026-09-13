@@ -35,3 +35,6 @@ Thumbs.db
 # logs
 *.log
 logs/
+
+# Runtime claim document uploads (never commit customer files)
+uploads/

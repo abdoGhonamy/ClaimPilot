@@ -9,9 +9,12 @@ using Microsoft.OpenApi;
 using ClaimPilot.API.Auth;
 using ClaimPilot.API.Middleware;
 using ClaimPilot.Application;
+using ClaimPilot.Application.Interfaces.Documents;
 using ClaimPilot.Infrastructure;
+using ClaimPilot.Infrastructure.Configuration;
 using ClaimPilot.Infrastructure.Data;
 using ClaimPilot.Infrastructure.Data.Seed;
+using ClaimPilot.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,6 +42,12 @@ builder.Services.AddSwaggerGen(options =>
     {
         { new OpenApiSecuritySchemeReference("Bearer", doc, string.Empty), new List<string>() }
     });
+
+    var xmlDocs = Path.Combine(AppContext.BaseDirectory, "ClaimPilot.API.xml");
+    if (File.Exists(xmlDocs))
+    {
+        options.IncludeXmlComments(xmlDocs);
+    }
 });
 
 builder.Services.AddProblemDetails();
@@ -86,6 +95,12 @@ builder.Services
 builder.Services.AddAuthorization();
 
 builder.Services.AddScoped<SeedData>();
+
+// ---------------------------------------------------------------------------
+// Claim intake storage (outside wwwroot; never serves files to the web).
+// ---------------------------------------------------------------------------
+builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(StorageOptions.SectionName));
+builder.Services.AddScoped<IStorageService, FileStorageService>();
 
 // ---------------------------------------------------------------------------
 // ClaimPilot layers
