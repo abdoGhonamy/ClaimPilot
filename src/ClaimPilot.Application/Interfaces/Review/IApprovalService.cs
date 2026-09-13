@@ -6,8 +6,8 @@ public sealed record ApproveRequest(string ReviewerId, string? Comment);
 public sealed record RejectRequest(string ReviewerId, string Comment);
 public sealed record EditRequest(string ReviewerId, string Comment, string EditedDecisionJson, decimal? EditedAmount);
 public sealed record ReReviewRequest(string ReviewerId, string? Comment);
-public sealed record AssignRequest(string AssigneeId, string? ReviewerId = null, string? Comment = null);
-public sealed record EscalateRequest(string ReviewerId, IReadOnlyList<string> ReviewerRoles, string? Comment);
+public sealed record AssignRequest(AssigneeRole Assignee, string ActorId, string? Comment = null);
+public sealed record EscalateRequest(string ActorId, IReadOnlyList<string> ReviewerRoles, string? Comment = null);
 public sealed record PriorityOverrideRequest(string ReviewerId, Priority NewPriority, string? Comment);
 
 public sealed record ReviewActionResult(Guid ApprovalItemId, ApprovalStatus NewStatus, Guid? RunId);

@@ -159,9 +159,10 @@ public sealed class ApprovalService : IApprovalService
         var item = await GetOrThrowAsync(id, ct);
 
         var before = item.AssignedTo;
-        item.AssignedTo = req.AssigneeId;
-        await AppendHistoryAsync(item, ApprovalAction.Assigned, req.ReviewerId, req.Comment,
-            before, item.AssignedTo, ct);
+        item.AssignedTo = req.Assignee;
+        item.AssignedAt = DateTime.UtcNow;
+        await AppendHistoryAsync(item, ApprovalAction.Assigned, req.ActorId, req.Comment,
+            before?.ToString(), item.AssignedTo?.ToString(), ct);
 
         return new ReviewActionResult(item.Id, item.Status, item.RunId);
     }
@@ -173,15 +174,16 @@ public sealed class ApprovalService : IApprovalService
         RequireState(item, ApprovalStatus.Pending);
 
         var callerRoles = req.ReviewerRoles ?? Array.Empty<string>();
-        var nextAssignee = callerRoles.Contains("Supervisor") || callerRoles.Contains("Director")
-            ? "director"
-            : callerRoles.Contains("Adjuster") ? "supervisor" : "director";
+        var nextAssignee = callerRoles.Any(r => r is "Supervisor" or "Director")
+            ? AssigneeRole.Director
+            : AssigneeRole.Supervisor;
 
         var before = item.AssignedTo;
         item.Status = ApprovalStatus.Escalated;
         item.AssignedTo = nextAssignee;
-        await AppendHistoryAsync(item, ApprovalAction.Escalated, req.ReviewerId, req.Comment,
-            before, item.AssignedTo, ct);
+        item.AssignedAt = DateTime.UtcNow;
+        await AppendHistoryAsync(item, ApprovalAction.Escalated, req.ActorId, req.Comment,
+            before?.ToString(), item.AssignedTo?.ToString(), ct);
 
         return new ReviewActionResult(item.Id, item.Status, item.RunId);
     }
