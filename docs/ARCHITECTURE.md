@@ -66,8 +66,25 @@ the run trace.
    `EffectiveDate <= incidentDate && Status != Retired`, newest-first — tested for AUT-2022
    (2023 → v1 $5,000; 2026 → v2 $7,200).
 3. Audits are append-only (`AuditLogs`, `ApprovalHistories`, run `TraceRecords`).
-4. Roles server-side: queue = Adjuster+Supervisor; approve/reject/edit/re-review = Supervisor;
-   viewer can only read.
+4. Roles server-side: queue = Adjuster+Supervisor; viewer can only read;
+   `approve`/`reject`/`edit` are gated to the item's `AssigneeRole` (see
+   "Human review assignment" below) with monetary thresholds on approve/edit;
+   `assign`/priority override = Supervisor+Director.
+
+## Human review assignment
+
+Every `ApprovalItem` carries a typed `AssigneeRole` (`Adjuster`, `Supervisor`,
+`Director`) plus an `AssignedAt` timestamp. `AssignmentRouter.Compute` routes
+items **at creation** in `SupervisorOrchestrator` by priority floor then amount
+bands: Critical → Director; High → Supervisor (≤ $100K) / Director; Normal &
+Low → Adjuster (≤ $10K) / Supervisor / Director. The enum is stored as a capped
+string column (`AssignedTo varchar(32)`) with an index; the API serializes it
+as JSON strings via `JsonStringEnumConverter`. `approve`/`reject`/`edit` are
+authorized **assignee-only** by `RequireApprovalAuthority` (higher roles must
+reassign first; unassigned items → 409). `ApprovalService.AssignAsync` sets
+`AssignedTo` + `AssignedAt`; `EscalateAsync` forwards to the next level;
+`SlaEscalationWorker` reassigns stalled items (8h Adjuster → Supervisor,
+16h Supervisor → Director, 2h unassigned → by priority). See `docs/SECURITY.md`.
 
 ## Storage
 
