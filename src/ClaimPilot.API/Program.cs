@@ -11,6 +11,8 @@ using ClaimPilot.API.Middleware;
 using ClaimPilot.Application;
 using ClaimPilot.Application.Interfaces.Documents;
 using ClaimPilot.Infrastructure;
+using System.Text.Json.Serialization;
+
 using ClaimPilot.Infrastructure.Configuration;
 using ClaimPilot.Infrastructure.Data;
 using ClaimPilot.Infrastructure.Data.Seed;
@@ -18,7 +20,8 @@ using ClaimPilot.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {

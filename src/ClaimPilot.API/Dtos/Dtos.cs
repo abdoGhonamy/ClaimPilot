@@ -72,7 +72,7 @@ public sealed record ReviewApproveBody(string? Comment);
 public sealed record ReviewRejectBody([Required] string Comment);
 public sealed record ReviewEditBody([Required] string Comment, [Required] string EditedDecisionJson, decimal? EditedAmount);
 public sealed record ReviewReReviewBody(string? Comment);
-public sealed record ReviewAssignBody([Required] string AssigneeId, string? Comment);
+public sealed record ReviewAssignBody([Required] AssigneeRole Assignee, string? Comment);
 public sealed record ReviewEscalateBody(string? Comment);
 public sealed record ReviewPriorityBody([Required] Priority NewPriority, string? Comment);
 
