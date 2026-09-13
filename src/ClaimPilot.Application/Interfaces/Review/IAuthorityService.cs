@@ -6,4 +6,5 @@ public interface IAuthorityService
 {
     Task<bool> CanApproveAsync(ClaimsPrincipal user, decimal amount, string action, CancellationToken ct);
     decimal GetThresholdForUser(ClaimsPrincipal user);
+    decimal GetThresholdForRole(string role);
 }

@@ -29,4 +29,12 @@ public sealed class AuthorityService : IAuthorityService
         if (user.IsInRole("Adjuster")) return _options.Adjuster;
         return 0m;
     }
+
+    public decimal GetThresholdForRole(string role) => role switch
+    {
+        "Adjuster" => _options.Adjuster,
+        "Supervisor" => _options.Supervisor,
+        "Director" => _options.Director,
+        _ => 0m
+    };
 }
