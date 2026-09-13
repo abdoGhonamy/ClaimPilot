@@ -66,6 +66,55 @@ dotnet run --project src/ClaimPilot.API   # http://localhost:5028
 The API migrates and seeds on startup. See [docs/RUNBOOK.md](docs/RUNBOOK.md) for the full
 local setup and an adjudication walkthrough.
 
+## Claim intake
+
+Adjusters (and supervisors) create claims and attach supporting documents before
+adjudication. Both endpoints require `Authorization: Bearer <token>` and the
+`Adjuster` or `Supervisor` role.
+
+### Create a claim
+
+```bash
+curl -s -X POST http://localhost:5028/api/claims \
+  -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d '{
+    "policyNumber": "AUT-2022",
+    "incidentDate": "2024-06-15T00:00:00Z",
+    "claimAmount": 1400.00,
+    "description": "My car was hit by another vehicle at the intersection of Main and 5th."
+  }'
+```
+
+Returns `201` with the claim and a `Location` header. Claim numbers follow
+`CLAIM-{year}-{seq}` (per-year sequential, generated inside the repository in a
+serializable transaction). The policy must exist; incident date must be in the past;
+amount is `> 0` and ≤ 10,000,000; description is 20–4000 characters.
+
+### Upload a document
+
+```bash
+curl -s -X POST http://localhost:5028/api/claims/{claimId}/documents \
+  -H "Authorization: Bearer $TOK" \
+  -F "documentType=PoliceReport" \
+  -F "file=@police_report.pdf;type=application/pdf"
+```
+
+Multipart with `documentType` (`PoliceReport`, `Photo`, `Receipt`, `MedicalReport`,
+`Invoice`, `Other`) and `file`. Limits: 20 MB; extensions `.pdf` `.jpg`/`.jpeg`
+`.png` `.webp` `.heic` with matching magic bytes (the client-declared `Content-Type`
+is ignored — the actual file bytes are sniffed). Files are written outside `wwwroot`
+to `{Storage:UploadRoot}/{claimId:N}/{documentId:N}{ext}` (generated names, never the
+client filename), and each upload is recorded as a `ClaimDocument` row plus an
+`Uploaded` audit entry.
+
+### Storage configuration
+
+`appsettings.json` → `Storage:UploadRoot` (default `uploads/`, git-ignored):
+
+```json
+{ "Storage": { "UploadRoot": "uploads" } }
+```
+
 ## Test
 
 ```bash
