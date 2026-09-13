@@ -41,7 +41,7 @@ curl -s http://localhost:8080/swagger/index.html   # (Development mode)
 ```
 
 Demo accounts: adjuster / `Adjuster#2026-local-only`, supervisor / `Supervisor#2026-local-only`,
-viewer / `Viewer#2026-local-only`.
+director / `Director#2026-local-only`, viewer / `Viewer#2026-local-only`.
 
 On first start the API migrates the database and seeds 15 policies, 17 wordings
 (42 coverage rows / 42 exclusions / 103 vector chunks) and 12 demo claims, including two
