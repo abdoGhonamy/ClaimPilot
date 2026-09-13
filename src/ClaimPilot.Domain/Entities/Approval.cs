@@ -10,7 +10,8 @@ public class ApprovalItem
     public ApprovalStatus Status { get; set; } = ApprovalStatus.Pending;
     public Priority Priority { get; set; } = Priority.Normal;
     public DateTime? SLADeadline { get; set; }
-    public string? AssignedTo { get; set; }
+    public AssigneeRole? AssignedTo { get; set; }
+    public DateTime? AssignedAt { get; set; }
     public string? Title { get; set; }
     public string? Summary { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
