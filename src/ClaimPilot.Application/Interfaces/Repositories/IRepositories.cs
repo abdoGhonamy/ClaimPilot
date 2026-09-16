@@ -46,8 +46,8 @@ public interface IApprovalRepository
     Task<ApprovalItem> AddAsync(ApprovalItem item, CancellationToken ct);
     Task AddHistoryAsync(ApprovalHistory history, CancellationToken ct);
     Task<IReadOnlyList<ApprovalItem>> QueryAsync(
-        ApprovalStatus? status, string? assigneeId, Priority? priority, CancellationToken ct);
-    Task<int> FindUserQueueCountAsync(string assigneeId, CancellationToken ct);
+        ApprovalStatus? status, AssigneeRole? assigneeId, Priority? priority, CancellationToken ct);
+    Task<int> FindUserQueueCountAsync(AssigneeRole? assigneeId, CancellationToken ct);
     Task SaveChangesAsync(CancellationToken ct);
 }
 

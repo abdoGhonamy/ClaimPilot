@@ -68,7 +68,12 @@ public enum UserRole
     Viewer = 3,
     Director = 4
 }
-
+public enum AssigneeRole
+{
+    Adjuster   = 1,
+    Supervisor = 2,
+    Director   = 3
+}
 public enum RunStatus
 {
     Pending = 1,
@@ -109,11 +114,4 @@ public enum CoverageType
     Coinsurance = 3,
     Benefit = 4,
     Condition = 5
-}
-
-public enum AssigneeRole
-{
-    Adjuster = 1,
-    Supervisor = 2,
-    Director = 3
 }

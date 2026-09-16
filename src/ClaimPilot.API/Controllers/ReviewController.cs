@@ -27,7 +27,7 @@ public sealed class ReviewController : ControllerBase
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<ApprovalItemView>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ApprovalItemView>>> Queue(
-        [FromQuery] ApprovalStatus? status, [FromQuery] string? assigneeId, [FromQuery] Priority? priority,
+        [FromQuery] ApprovalStatus? status, [FromQuery] AssigneeRole? assigneeId, [FromQuery] Priority? priority,
         CancellationToken ct)
     {
         var items = await _queue.GetQueueAsync(new ReviewQueueFilter(status ?? ApprovalStatus.Pending, assigneeId, null, priority), ct);

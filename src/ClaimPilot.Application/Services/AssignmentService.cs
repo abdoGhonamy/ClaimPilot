@@ -91,7 +91,9 @@ public sealed class AssignmentService : IAssignmentService
         var chosen = candidates[0];
         foreach (var candidate in candidates)
         {
-            var count = await _approvals.FindUserQueueCountAsync(candidate, ct);
+            var count = Enum.TryParse<AssigneeRole>(candidate, ignoreCase: true, out var role)
+                ? await _approvals.FindUserQueueCountAsync(role, ct)
+                : int.MaxValue;
             if (count < min)
             {
                 min = count;
