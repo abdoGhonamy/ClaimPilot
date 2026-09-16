@@ -59,8 +59,11 @@ public static class DependencyInjection
 
         services.AddHttpClient<OllamaLLMProvider>();
         services.AddHttpClient<OllamaEmbeddingProvider>();
-
-        services.AddSingleton<ILLMProvider>(sp => sp.GetRequiredService<OllamaLLMProvider>());
+        services.AddSingleton<DeterministicLLMProvider>();
+        services.AddSingleton<ILLMProvider>(sp =>
+            string.Equals(configuration["AI:Provider"], "Deterministic", StringComparison.OrdinalIgnoreCase)
+                ? sp.GetRequiredService<DeterministicLLMProvider>()
+                : sp.GetRequiredService<OllamaLLMProvider>());
         services.AddSingleton<IEmbeddingProvider>(sp => sp.GetRequiredService<OllamaEmbeddingProvider>());
 
         services.AddHostedService<UsageEventForwarder>();
