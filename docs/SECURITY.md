@@ -1,5 +1,21 @@
 # Security
 
+## Threat-to-control summary
+
+| Threat | Implemented control | Remaining work |
+|---|---|---|
+| Broken access control | JWT roles and server-side review authority filters | Add claim ownership/tenant checks before multi-tenant deployment. |
+| Injection and malicious uploads | Parameterized EF Core queries, validation, file signature checks and generated storage names | Add malware scanning in production. |
+| Prompt injection | Retrieved text framed as data, restricted tools, groundedness checks and adversarial cases | Add document-level adversarial ingestion tests. |
+| Sensitive disclosure | Synthetic data only; secrets excluded from `.env` | Add PII detection/redaction before external-provider use. |
+| Excessive agency | Agent tool allow-lists; write actions gated and audited | Maintain schema validation for every new tool. |
+| Abuse and unbounded spend | Payload limits, orchestration timeout/retries and local usage persistence | Add distributed rate limits and per-user budgets. |
+| Supply chain | Pinned package versions and CI dependency/secret scans | Enable GitHub Dependabot and code scanning. |
+
+## Configuration safeguards
+
+Development CORS is intentionally permissive for the local demo; production must restrict allowed origins. Deployments must replace the demo JWT key and seed credentials. Audit records must never contain tokens, passwords or raw production PII.
+
 ## Approval Authority Model
 
 ClaimPilot gates the human review queue by **role-based monetary thresholds**
