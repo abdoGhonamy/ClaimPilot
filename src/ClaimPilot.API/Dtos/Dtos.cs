@@ -102,7 +102,7 @@ public sealed record UsageDto(
     int OutputTokens,
     decimal EstimatedCostUsd);
 
-public sealed record ReviewQueueFilterRequest(ApprovalStatus? Status, string? AssigneeId, Priority? Priority);
+public sealed record ReviewQueueFilterRequest(ApprovalStatus? Status, AssigneeRole? AssigneeId, Priority? Priority);
 
 public sealed record AuditDto(
     Guid Id,

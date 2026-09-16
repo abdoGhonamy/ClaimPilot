@@ -6,6 +6,18 @@ corpus, and an **Ollama LLM** that never computes money. Every decision is gated
 human **review queue** with SLA escalations; the draft is only ever finalized by a
 supervisor.
 
+## 5-minute demo path
+
+1. Run `docker compose up -d --build`, then open `http://localhost:8080`.
+2. Sign in as `adjuster`, load claims, and select `CLAIM-2023-001`.
+3. Ask a policy question and inspect its citations; ask an unsupported question and show refusal.
+4. Run adjudication and show the live SSE trace, version selection, and deterministic payout.
+5. Sign in as `supervisor`, inspect the review queue, statistics, and audit trace.
+
+For a fully offline safe fallback set `AI__Provider=Deterministic`. It returns the
+standard refusal rather than fabricating policy content. Ollama remains the normal local
+provider; both implementations sit behind `ILLMProvider` and are selected by configuration.
+
 ## Why it is trustworthy
 
 - Amounts are computed by `DeterministicAdjudicationEngine` (pure, repeatable, unit-tested).
@@ -120,6 +132,18 @@ client filename), and each upload is recorded as a `ClaimDocument` row plus an
 ```bash
 dotnet test tests/ClaimPilot.Tests/ClaimPilot.Tests.csproj
 ```
+
+## Evaluation, teaching, and submission evidence
+
+Run the evaluation harness after starting the API:
+
+```bash
+dotnet run --project tools/ClaimPilot.Evaluation -- --base-url http://localhost:5028
+```
+
+The teaching deck, lab, assessment map and trainee-mistakes note live in `teaching/`.
+Use `docs/SUBMISSION-CHECKLIST.md` for the GitHub configuration and recorded-video steps
+that require the repository owner. Add the two unlisted video links here before submission.
 
 Unit tests need no external services (determinism, version traps, refusal/groundedness,
 approval state machine, role gating, JSON extraction).

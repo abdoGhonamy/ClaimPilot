@@ -42,3 +42,16 @@ jobs:
 
       - name: Validate compose file
         run: docker compose config -q
+
+  security-scan:
+    name: Dependency and secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan tracked history for likely secrets
+        run: |
+          ! git log --all -p | grep -E '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY-----)'
+      - name: Audit NuGet dependencies
+        run: dotnet list ClaimPilot.slnx package --vulnerable --include-transitive

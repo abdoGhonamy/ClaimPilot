@@ -30,7 +30,7 @@ public interface IApprovalService
 
 public sealed record ReviewQueueFilter(
     ApprovalStatus? Status = null,
-    string? AssigneeId = null,
+    AssigneeRole? AssigneeId = null,
     string? PolicyNumber = null,
     Priority? Priority = null);
 
@@ -43,7 +43,7 @@ public sealed record ApprovalItemView(
     ApprovalStatus Status,
     Priority Priority,
     DateTime? SLADeadline,
-    string? AssignedTo,
+    AssigneeRole? AssignedTo,
     bool IsLate,
     DateTime CreatedAt,
     DateTime? ReviewedAt,
@@ -64,7 +64,7 @@ public sealed record ApprovalItemDetail(
     ApprovalStatus Status,
     Priority Priority,
     DateTime? SLADeadline,
-    string? AssignedTo,
+    AssigneeRole? AssignedTo,
     string? OriginalDraftJson,
     string? CurrentDraftJson,
     string? EditedDraftJson,

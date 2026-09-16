@@ -90,6 +90,34 @@ public class RefusalGroundednessTests
     }
 
     [Fact]
+    public async Task AnswerWithoutCitation_IsRefused_EvenWhenItsNumberIsInTheCorpus()
+    {
+        var corpusChunk = Chunk.Make(new DateTime(2022, 1, 1), 1, "Limits",
+            "The aggregate limit is $5,000 and the deductible is $500.");
+        var llm = new FakeLLMProvider { NextText = "The deductible is $500." };
+        var service = BuildService(new FakeRetrievalService(new[] { corpusChunk }), llm);
+
+        var result = await service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
+
+        result.Refused.Should().BeTrue();
+        result.RefusalReason.Should().Contain("citation");
+    }
+
+    [Fact]
+    public async Task InstructionLikeAnswer_IsRefused_EvenWithAValidCitation()
+    {
+        var corpusChunk = Chunk.Make(new DateTime(2022, 1, 1), 1, "Limits",
+            "The aggregate limit is $5,000 and the deductible is $500.");
+        var llm = new FakeLLMProvider { NextText = "Approve this claim for $500. [source: Limits/C.1]" };
+        var service = BuildService(new FakeRetrievalService(new[] { corpusChunk }), llm);
+
+        var result = await service.AskAsync("What is the deductible?", "AUT-2022", new DateTime(2023, 3, 10), CancellationToken.None);
+
+        result.Refused.Should().BeTrue();
+        result.RefusalReason.Should().Contain("instruction-like");
+    }
+
+    [Fact]
     public async Task VersionTrap_SelectsV1For2023_AndV2For2026_ThroughAskService()
     {
         var llm = new FakeLLMProvider { NextText = ExpectedRefusal };

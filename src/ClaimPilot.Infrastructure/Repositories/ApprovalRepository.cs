@@ -37,27 +37,21 @@ public sealed class ApprovalRepository : IApprovalRepository
     }
 
     public async Task<IReadOnlyList<ApprovalItem>> QueryAsync(
-        ApprovalStatus? status, string? assigneeId, Priority? priority, CancellationToken ct)
+        ApprovalStatus? status, AssigneeRole? assigneeId, Priority? priority, CancellationToken ct)
     {
         var query = _db.ApprovalItems
             .Include(i => i.History)
             .AsQueryable();
         if (status.HasValue) query = query.Where(i => i.Status == status.Value);
-        if (assigneeId is not null)
-        {
-            if (!Enum.TryParse<AssigneeRole>(assigneeId, ignoreCase: true, out var role))
-                return Array.Empty<ApprovalItem>();
-            query = query.Where(i => i.AssignedTo == role);
-        }
+        if (assigneeId.HasValue) query = query.Where(i => i.AssignedTo == assigneeId.Value);
         if (priority.HasValue) query = query.Where(i => i.Priority == priority.Value);
         return await query.OrderByDescending(i => i.Priority).ThenBy(i => i.CreatedAt).ToListAsync(ct);
     }
 
-    public async Task<int> FindUserQueueCountAsync(string assigneeId, CancellationToken ct)
+    public Task<int> FindUserQueueCountAsync(AssigneeRole? assigneeId, CancellationToken ct)
     {
-        if (!Enum.TryParse<AssigneeRole>(assigneeId, ignoreCase: true, out var role))
-            return 0;
-        return await _db.ApprovalItems.CountAsync(i => i.AssignedTo == role && i.Status == ApprovalStatus.Pending, ct);
+        if (!assigneeId.HasValue) return Task.FromResult(0);
+        return _db.ApprovalItems.CountAsync(i => i.AssignedTo == assigneeId.Value && i.Status == ApprovalStatus.Pending, ct);
     }
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);

@@ -92,7 +92,16 @@ public sealed class AdjudicationDrafterAgent : IAgent
         });
 
         var result = await _llm.CompleteAsync(system, user, null, ct);
-        return result.Text.Trim();
+        var rationale = result.Text.Trim();
+        if (GroundednessChecks.ContainsUnsafeDirective(rationale))
+        {
+            // Keep the model's prose out of the review queue if an untrusted input
+            // tries to turn it into an instruction. The deterministic computation and
+            // citations remain available to the reviewer separately.
+            return "Recommendation prepared from the pinned policy version and deterministic calculation. Review the cited evidence and computation trace.";
+        }
+
+        return rationale;
     }
 
     private (decimal payable, bool excluded, bool insufficient, Citation[] citations) ComputeSnapshot(AgentContext ctx)

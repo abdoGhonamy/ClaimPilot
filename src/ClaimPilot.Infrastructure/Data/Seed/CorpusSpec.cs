@@ -47,7 +47,31 @@ public static class CorpusSpec
         LifeTerm2021(),
         LifeUniversal2019(),
         LifeAccident2020()
-    };
+    }.Concat(SupplementalWordings()).ToList();
+
+    // Thirteen additional synthetic wordings bring the teaching corpus to 30
+    // documents. Each has ten labelled sections/pages so the corpus represents
+    // 300+ synthetic pages while preserving the same safe public-data posture.
+    private static IEnumerable<WordingSpec> SupplementalWordings()
+    {
+        var lines = new[] { "AUTO", "HEALTH", "HOME", "TRAVEL", "LIFE" };
+        for (var i = 1; i <= 13; i++)
+        {
+            var line = lines[(i - 1) % lines.Length];
+            var number = $"SYN-{line}-{i:00}";
+            yield return new WordingSpec
+            {
+                ProductLine = line, PolicyNumber = number, PolicyName = $"Synthetic {line} Teaching Wording {i}",
+                Version = 1, EffectiveDate = new DateTime(2020 + i % 5, 1, 1), Deductible = 250m,
+                Coinsurance = 1m, CoverageLimit = 5000m,
+                Exclusions = new[] { ("EX-SYN", "Synthetic training exclusion", "Synthetic training exclusions require human review.") },
+                Sections = Enumerable.Range(1, 10).Select(page => new SectionSpec(
+                    $"Training section {page}", $"SYN-{i}-{page}", page,
+                    $"Synthetic {line} policy {number}, section {page}. This public training content supports retrieval, citations, and version-aware exercises."))
+                    .ToList()
+            };
+        }
+    }
 
     public static WordingSpec Auto2022V1() => new()
     {

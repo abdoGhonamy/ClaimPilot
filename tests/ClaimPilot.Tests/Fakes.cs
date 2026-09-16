@@ -251,15 +251,16 @@ public sealed class FakeApprovalRepository : IApprovalRepository
     }
 
     public Task<IReadOnlyList<ApprovalItem>> QueryAsync(
-        ApprovalStatus? status, string? assigneeId, Priority? priority, CancellationToken ct)
+        ApprovalStatus? status, AssigneeRole? assigneeId, Priority? priority, CancellationToken ct)
     {
         var query = _items.AsEnumerable();
         if (status.HasValue) query = query.Where(i => i.Status == status.Value);
+        if (assigneeId.HasValue) query = query.Where(i => i.AssignedTo == assigneeId.Value);
         return Task.FromResult<IReadOnlyList<ApprovalItem>>(query.ToList());
     }
 
-    public Task<int> FindUserQueueCountAsync(string assigneeId, CancellationToken ct)
-        => Task.FromResult(_items.Count(i => i.AssignedTo?.ToString() == assigneeId && i.Status == ApprovalStatus.Pending));
+    public Task<int> FindUserQueueCountAsync(AssigneeRole? assigneeId, CancellationToken ct)
+        => Task.FromResult(_items.Count(i => i.AssignedTo == assigneeId && i.Status == ApprovalStatus.Pending));
 
     public Task SaveChangesAsync(CancellationToken ct) => Task.CompletedTask;
 }
