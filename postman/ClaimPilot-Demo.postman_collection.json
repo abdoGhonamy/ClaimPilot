@@ -1,0 +1,137 @@
+{
+  "info": {
+    "_postman_id": "e8103e1c-3c57-4dde-a93d-dca3e3d7d054",
+    "name": "ClaimPilot API — Video Demo",
+    "description": "Runnable happy-path tests for a ClaimPilot video demo. Run the requests in order, or use Collection Runner. Tokens and IDs are saved automatically as collection variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5028" },
+    { "key": "adjusterUsername", "value": "adjuster" },
+    { "key": "adjusterPassword", "value": "Adjuster#2026-local-only" },
+    { "key": "supervisorUsername", "value": "supervisor" },
+    { "key": "supervisorPassword", "value": "Supervisor#2026-local-only" },
+    { "key": "adjusterToken", "value": "" },
+    { "key": "supervisorToken", "value": "" },
+    { "key": "versionTrapClaimId", "value": "" },
+    { "key": "createdClaimId", "value": "" },
+    { "key": "runId", "value": "" },
+    { "key": "approvalItemId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Service health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('API is healthy', function () { pm.response.to.have.status(200); });"
+      ] } }]
+    },
+    {
+      "name": "2. Login as adjuster",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{adjusterUsername}}\",\n  \"password\": \"{{adjusterPassword}}\"\n}" },
+        "url": "{{baseUrl}}/api/auth/login"
+      },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Adjuster login succeeds', function () { pm.response.to.have.status(200); });",
+        "const body = pm.response.json();",
+        "pm.test('Adjuster token and role are returned', function () { pm.expect(body.token).to.be.a('string').and.not.empty; pm.expect(body.roles).to.include('Adjuster'); });",
+        "pm.collectionVariables.set('adjusterToken', body.token);"
+      ] } }]
+    },
+    {
+      "name": "3. Confirm current adjuster",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }], "url": "{{baseUrl}}/api/auth/me" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Current user is the adjuster', function () { pm.response.to.have.status(200); pm.expect(pm.response.json().roles).to.include('Adjuster'); });"
+      ] } }]
+    },
+    {
+      "name": "4. List seeded claims and select version-trap claim",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }], "url": "{{baseUrl}}/api/claims" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Seeded claims are available', function () { pm.response.to.have.status(200); pm.expect(pm.response.json()).to.be.an('array').and.not.empty; });",
+        "const claim = pm.response.json().find(c => c.claimNumber === 'CLAIM-2023-001');",
+        "pm.test('2023 version-trap claim is seeded', function () { pm.expect(claim, 'CLAIM-2023-001').to.exist; });",
+        "if (claim) pm.collectionVariables.set('versionTrapClaimId', claim.id);"
+      ] } }]
+    },
+    {
+      "name": "5. Show version-trap claim details",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }], "url": "{{baseUrl}}/api/claims/{{versionTrapClaimId}}" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('The selected claim is the 2023 AUT-2022 scenario', function () { const body = pm.response.json(); pm.response.to.have.status(200); pm.expect(body.claimNumber).to.eql('CLAIM-2023-001'); pm.expect(body.policyNumber).to.eql('AUT-2022'); });"
+      ] } }]
+    },
+    {
+      "name": "6. Create a claim",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"policyNumber\": \"AUT-2022\",\n  \"incidentDate\": \"2026-06-15T00:00:00Z\",\n  \"claimAmount\": 1400.00,\n  \"description\": \"Vehicle damage after another driver hit my parked car at Main Street and Fifth Avenue.\"\n}" },
+        "url": "{{baseUrl}}/api/claims"
+      },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Claim intake returns 201', function () { pm.response.to.have.status(201); });",
+        "const body = pm.response.json();",
+        "pm.test('New claim has an identifier and submitted status', function () { pm.expect(body.id).to.be.a('string'); pm.expect(body.status).to.eql('Submitted'); });",
+        "pm.collectionVariables.set('createdClaimId', body.id);"
+      ] } }]
+    },
+    {
+      "name": "7. Ask a grounded policy question",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"question\": \"What deductible applies to an automobile collision claim?\",\n  \"policyNumber\": \"AUT-2022\",\n  \"incidentDate\": \"2026-06-15T00:00:00Z\"\n}" },
+        "url": "{{baseUrl}}/api/ask"
+      },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Policy Q&A returns a safe response', function () { pm.response.to.have.status(200); const body = pm.response.json(); pm.expect(body.answer).to.be.a('string').and.not.empty; pm.expect(body.refused).to.be.a('boolean'); });"
+      ] } }]
+    },
+    {
+      "name": "8. Stream adjudication (SSE)",
+      "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{adjusterToken}}" }, { "key": "Accept", "value": "text/event-stream" }], "url": "{{baseUrl}}/api/claims/{{versionTrapClaimId}}/adjudicate?correlationId=postman-video-demo" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Adjudication request completed', function () { pm.response.to.have.status(200); });",
+        "const stream = pm.response.text();",
+        "pm.test('SSE includes a completed run', function () { pm.expect(stream).to.include('event: run_complete'); });",
+        "const match = stream.match(/event: run_complete\\s+data: (.*)/);",
+        "if (match) { const envelope = JSON.parse(match[1]); const run = JSON.parse(envelope.payload); pm.collectionVariables.set('runId', run.Id || run.id || envelope.run_id); if (run.ApprovalItems && run.ApprovalItems.length) pm.collectionVariables.set('approvalItemId', run.ApprovalItems[0].Id || run.ApprovalItems[0].id); }"
+      ] } }]
+    },
+    {
+      "name": "9. Login as supervisor",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{supervisorUsername}}\",\n  \"password\": \"{{supervisorPassword}}\"\n}" }, "url": "{{baseUrl}}/api/auth/login" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Supervisor login succeeds', function () { pm.response.to.have.status(200); });",
+        "const body = pm.response.json(); pm.test('Supervisor role is returned', function () { pm.expect(body.roles).to.include('Supervisor'); }); pm.collectionVariables.set('supervisorToken', body.token);"
+      ] } }]
+    },
+    {
+      "name": "10. Review queue",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{supervisorToken}}" }], "url": "{{baseUrl}}/api/review?status=Pending" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Supervisor can access the pending review queue', function () { pm.response.to.have.status(200); pm.expect(pm.response.json()).to.be.an('array'); });",
+        "const items = pm.response.json(); if (!pm.collectionVariables.get('approvalItemId') && items.length) pm.collectionVariables.set('approvalItemId', items[0].id);"
+      ] } }]
+    },
+    {
+      "name": "11. Review statistics",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{supervisorToken}}" }], "url": "{{baseUrl}}/api/statistics" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Supervisor statistics are available', function () { pm.response.to.have.status(200); pm.expect(pm.response.json()).to.be.an('object'); });"
+      ] } }]
+    },
+    {
+      "name": "12. Audit trail",
+      "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{supervisorToken}}" }], "url": "{{baseUrl}}/api/audit?entityType=Claim&entityId={{versionTrapClaimId}}&take=20" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Claim audit entries are returned', function () { pm.response.to.have.status(200); pm.expect(pm.response.json()).to.be.an('array'); });"
+      ] } }]
+    }
+  ]
+}
