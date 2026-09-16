@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClaimPilot</title>
+  <style>body{font:16px system-ui;max-width:960px;margin:2rem auto;padding:0 1rem;color:#182230}section{border:1px solid #d7dce2;padding:1rem;margin:1rem 0}input,textarea,button{font:inherit;padding:.45rem;margin:.2rem}textarea{width:95%;min-height:5rem}pre{white-space:pre-wrap;background:#f5f7f9;padding:1rem;max-height:22rem;overflow:auto}.hidden{display:none}</style>
+</head>
+<body>
+<h1>ClaimPilot</h1><p>Insurance claims adjudication with human review.</p>
+<section id="login"><h2>Sign in</h2><input id="user" value="adjuster" aria-label="Username"><input id="password" value="Adjuster#2026-local-only" type="password" aria-label="Password"><button onclick="login()">Sign in</button><span id="identity"></span></section>
+<main id="app" class="hidden">
+<section><h2>Policy question</h2><input id="policy" value="AUT-2022" aria-label="Policy number"><textarea id="question">What deductible applies to an automobile collision claim?</textarea><button onclick="ask()">Ask</button><pre id="answer"></pre></section>
+<section><h2>Claims</h2><button onclick="claims()">Load claims</button><pre id="claimList"></pre></section>
+<section><h2>New claim</h2><input id="amount" value="1400" type="number" aria-label="Claim amount"><textarea id="description">Vehicle damage after another driver hit my parked car at Main Street and Fifth Avenue.</textarea><button onclick="createClaim()">Create claim</button><pre id="created"></pre></section>
+<section><h2>Live adjudication</h2><input id="claimId" placeholder="Claim ID" aria-label="Claim ID"><button onclick="adjudicate()">Run workflow</button><button onclick="stop()">Cancel stream</button><pre id="stream"></pre></section>
+<section><h2>Human review</h2><button onclick="reviewQueue()">Load pending queue</button><pre id="queue"></pre></section>
+</main>
+<script>
+let token='', controller;
+const out=(id,value)=>document.getElementById(id).textContent=typeof value==='string'?value:JSON.stringify(value,null,2);
+async function api(path, options={}) { const h=options.headers||{}; if(token)h.Authorization='Bearer '+token; const r=await fetch('/api'+path,{...options,headers:h}); const text=await r.text(); if(!r.ok)throw new Error(text||r.status); try{return JSON.parse(text)}catch{return text} }
+async function login(){try{const r=await api('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.value,password:password.value})});token=r.token;identity.textContent=r.username+' ('+r.roles.join(', ')+')';app.classList.remove('hidden')}catch(e){identity.textContent=e.message}}
+async function ask(){try{out('answer',await api('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:question.value,policyNumber:policy.value,incidentDate:'2026-06-15T00:00:00Z'})}))}catch(e){out('answer',e.message)}}
+async function claims(){try{const r=await api('/claims');out('claimList',r);const trap=r.find(x=>x.claimNumber==='CLAIM-2023-001');if(trap)claimId.value=trap.id}catch(e){out('claimList',e.message)}}
+async function createClaim(){try{const r=await api('/claims',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({policyNumber:policy.value,incidentDate:'2026-06-15T00:00:00Z',claimAmount:Number(amount.value),description:description.value})});claimId.value=r.id;out('created',r)}catch(e){out('created',e.message)}}
+async function adjudicate(){controller=new AbortController();stream.textContent='';try{const r=await fetch('/api/claims/'+claimId.value+'/adjudicate',{method:'POST',headers:{Authorization:'Bearer '+token,Accept:'text/event-stream'},signal:controller.signal});const reader=r.body.getReader(),dec=new TextDecoder();for(;;){const {value,done}=await reader.read();if(done)break;stream.textContent+=dec.decode(value,{stream:true})}}catch(e){stream.textContent+='\n'+e.message}}
+function stop(){if(controller)controller.abort()}
+async function reviewQueue(){try{out('queue',await api('/review?status=Pending'))}catch(e){out('queue',e.message)}}
+</script></body></html>
