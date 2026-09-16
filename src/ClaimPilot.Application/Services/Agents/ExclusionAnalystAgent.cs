@@ -119,7 +119,15 @@ public sealed class ExclusionAnalystAgent : IAgent
         {
             var result = await _llm.CompleteAsync(system, user, null, ct);
             var body = ExtractJson(result.Text);
-            return JsonExtraction.DeserializeArray<ExclusionCandidate>(body).ToList();
+            // The model may only select codes supplied by the server. Discard all
+            // model-provided metadata and unknown/duplicate codes before any tool call.
+            var allowed = candidates.ToDictionary(c => c.Code, StringComparer.OrdinalIgnoreCase);
+            return JsonExtraction.DeserializeArray<ExclusionCandidate>(body)
+                .Select(choice => allowed.GetValueOrDefault(choice.Code))
+                .Where(choice => choice is not null)
+                .Select(choice => choice!)
+                .DistinctBy(choice => choice.Code, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
         catch (JsonException)
         {
