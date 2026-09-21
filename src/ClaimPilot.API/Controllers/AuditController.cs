@@ -8,7 +8,7 @@ namespace ClaimPilot.API.Controllers;
 
 [ApiController]
 [Route("api/audit")]
-[Authorize(Roles = "Supervisor")]
+[Authorize(Roles = "Supervisor,Director")]
 public sealed class AuditController : ControllerBase
 {
     private readonly IAuditService _audit;

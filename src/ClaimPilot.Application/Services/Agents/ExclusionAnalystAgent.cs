@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ClaimPilot.Application.Common;
 using ClaimPilot.Application.Interfaces.AI;
 using ClaimPilot.Application.Interfaces.Orchestration;
@@ -18,15 +20,21 @@ public sealed class ExclusionAnalystAgent : IAgent
     private readonly IToolRegistry _tools;
     private readonly ILLMProvider _llm;
     private readonly OrchestrationEventSink _events;
+    private readonly ILogger<ExclusionAnalystAgent> _logger;
 
     public AgentType AgentType => AgentType.ExclusionAnalyst;
     public string DisplayName => "Exclusion Analyst";
 
-    public ExclusionAnalystAgent(IToolRegistry tools, ILLMProvider llm, OrchestrationEventSink events)
+    public ExclusionAnalystAgent(
+        IToolRegistry tools,
+        ILLMProvider llm,
+        OrchestrationEventSink events,
+        ILogger<ExclusionAnalystAgent>? logger = null)
     {
         _tools = tools;
         _llm = llm;
         _events = events;
+        _logger = logger ?? NullLogger<ExclusionAnalystAgent>.Instance;
     }
 
     public async Task<AgentResult> ExecuteAsync(AgentContext ctx, CancellationToken ct)
@@ -47,6 +55,10 @@ public sealed class ExclusionAnalystAgent : IAgent
         var match = JsonSerializer.Deserialize<PolicyMatchResult>(retrieveCall.OutputJson)
             ?? throw new DomainException("Exclusion Analyst could not parse policy match.");
 
+        _logger.LogInformation(
+            "Exclusion Analyst received policy retrieval for run {RunId}: payload length {Length}, version {Version}, exclusion count {Count}",
+            ctx.RunId, retrieveCall.OutputJson.Length, match.Version, match.Exclusions?.Count ?? 0);
+
         IReadOnlyList<CoverageLine> covered = match.CoverageItems;
         var toolCalls = new List<ToolCallRecord> { retrieveCall };
 
@@ -55,7 +67,15 @@ public sealed class ExclusionAnalystAgent : IAgent
         var exclusions = (match.Exclusions ?? Array.Empty<PolicyExclusionLine>())
             .Select(e => new ExclusionCandidate(e.Code, e.Name, e.Description)).ToList();
 
-        var relevant = await SelectRelevantExclusionsAsync(ctx, exclusions, ct);
+        // The deterministic tool is the safety decision point. For the normal, small
+        // policy exclusion set, verify every exclusion instead of letting an LLM
+        // shortlist silently omit a relevant one.
+        var relevant = exclusions.Count <= 20
+            ? exclusions
+            : await SelectRelevantExclusionsAsync(ctx, exclusions, ct);
+        _logger.LogInformation(
+            "Exclusion Analyst will check {CandidateCount} of {TotalCount} exclusions for run {RunId}",
+            relevant.Count, exclusions.Count, ctx.RunId);
 
         var applicable = new List<ApplicableExclusion>();
         foreach (var candidate in relevant)
@@ -73,16 +93,26 @@ public sealed class ExclusionAnalystAgent : IAgent
             toolCalls.Add(checkCall);
 
             if (!checkCall.Succeeded)
+            {
+                _logger.LogWarning("CheckExclusion failed for {Code} in run {RunId}: {Error}",
+                    candidate.Code, ctx.RunId, checkCall.Error);
                 continue;
+            }
 
             var result = JsonSerializer.Deserialize<ExclusionCheckResult>(checkCall.OutputJson);
+            _logger.LogInformation("CheckExclusion returned for {Code} in run {RunId}: {Output}",
+                candidate.Code, ctx.RunId, checkCall.OutputJson);
             if (result is { IsApplicable: true })
             {
                 applicable.Add(new ApplicableExclusion(result.Code ?? candidate.Code, result.Name ?? string.Empty, result.Evidence ?? string.Empty));
             }
         }
 
-        var output = new { applicable_codes = applicable, evidence = applicable.Select(a => a.Evidence).ToList() };
+        var output = new
+        {
+            applicable_codes = applicable.Select(a => a.Code).ToList(),
+            evidence = applicable.Select(a => a.Evidence).ToList()
+        };
         var outputJson = JsonSerializer.Serialize(output);
 
         await _events.Emit(ctx.RunId, ctx.CorrelationId, "agent_completed", DisplayName,
@@ -108,7 +138,6 @@ public sealed class ExclusionAnalystAgent : IAgent
             Given a claim description and a list of exclusion codes, return the JSON array of exclusions
             that plausibly relate to this claim. Respond with JSON only.
             """;
-
         var user = JsonSerializer.Serialize(new
         {
             claim_description = ctx.ClaimDescription,
@@ -122,16 +151,26 @@ public sealed class ExclusionAnalystAgent : IAgent
             // The model may only select codes supplied by the server. Discard all
             // model-provided metadata and unknown/duplicate codes before any tool call.
             var allowed = candidates.ToDictionary(c => c.Code, StringComparer.OrdinalIgnoreCase);
-            return JsonExtraction.DeserializeArray<ExclusionCandidate>(body)
+            var selected = JsonExtraction.DeserializeArray<ExclusionCandidate>(body)
                 .Select(choice => allowed.GetValueOrDefault(choice.Code))
                 .Where(choice => choice is not null)
                 .Select(choice => choice!)
                 .DistinctBy(choice => choice.Code, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            // Fail safe toward verification, not toward approval. If the LLM could not
+            // narrow the candidate set (empty/unparsable output), fall back to letting
+            // the deterministic check_exclusion tool judge EVERY exclusion on the pinned
+            // version. An empty classification must never silently exempt a claim.
+            return selected.Count > 0
+                ? selected
+                : candidates;
         }
         catch (JsonException)
         {
-            return new List<ExclusionCandidate>();
+            // Unparsable model output → verify every candidate deterministically rather
+            // than assume none apply (which would otherwise default every claim to approve).
+            return candidates;
         }
     }
 

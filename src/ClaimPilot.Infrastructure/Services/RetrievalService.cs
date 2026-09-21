@@ -23,23 +23,26 @@ namespace ClaimPilot.Infrastructure.Services;
 public sealed class RetrievalService : IRetrievalService
 {
     private readonly AppDbContext _db;
-    private readonly IEmbeddingProvider _embeddings;
+    private readonly IEmbeddingProviderResolver _embeddingProviders;
+    private readonly IAiPipelineContext _pipeline;
     private readonly IPolicyRepository _policies;
     private readonly IUsageTracker _usage;
     private readonly ILogger<RetrievalService> _logger;
 
     private const string ChunkColumns =
-        "\"Id\", \"PolicyVersionId\", \"Content\", \"Section\", \"Clause\", \"Page\", \"Metadata\", \"Embedding\", \"ContentHash\", \"TokenCount\", \"CreatedAt\"";
+        "c.\"Id\", c.\"PolicyVersionId\", c.\"Content\", c.\"Section\", c.\"Clause\", c.\"Page\", c.\"Metadata\", c.\"Embedding\", c.\"ContentHash\", c.\"TokenCount\", c.\"CreatedAt\"";
 
     public RetrievalService(
         AppDbContext db,
-        IEmbeddingProvider embeddings,
+        IEmbeddingProviderResolver embeddingProviders,
+        IAiPipelineContext pipeline,
         IPolicyRepository policies,
         IUsageTracker usage,
         ILogger<RetrievalService> logger)
     {
         _db = db;
-        _embeddings = embeddings;
+        _embeddingProviders = embeddingProviders;
+        _pipeline = pipeline;
         _policies = policies;
         _usage = usage;
         _logger = logger;
@@ -57,15 +60,40 @@ public sealed class RetrievalService : IRetrievalService
         var denseFailed = false;
         try
         {
-            var vector = await _embeddings.EmbedAsync(query.Question, ct);
+            if (_pipeline.Current == AiPipeline.Gemini && !await HasEmbeddingIndexAsync("gemini", ct))
+            {
+                _logger.LogWarning("Gemini embedding index is unavailable; switching whole request to Ollama.");
+                _pipeline.Select(AiPipeline.Ollama, "Gemini embedding index unavailable");
+            }
+            var provider = _embeddingProviders.Get(_pipeline.Current);
+            var vector = await provider.EmbedAsync(query.Question, ct);
             await _usage.RecordAsync(new UsageRecord("retrieval", vector.Provider, vector.Model,
                 vector.InputTokens ?? 0, 0, vector.InputTokens ?? 0, 0m, DateTime.UtcNow), ct);
-            dense = await DenseRetrieveAsync(query, version, vector.Vector, ct);
+            dense = await DenseRetrieveAsync(query, version, vector.Vector, provider.ProviderName, provider.ModelName, ct);
         }
         catch (Exception ex)
         {
-            denseFailed = true;
-            _logger.LogWarning(ex, "Dense retrieval unavailable; falling back to keyword-only.");
+            if (_pipeline.Current == AiPipeline.Gemini)
+            {
+                _logger.LogWarning(ex, "Gemini embedding retrieval unavailable; switching whole request to Ollama.");
+                _pipeline.Select(AiPipeline.Ollama, ex.GetType().Name);
+                try
+                {
+                    var provider = _embeddingProviders.Get(AiPipeline.Ollama);
+                    var vector = await provider.EmbedAsync(query.Question, ct);
+                    dense = await DenseRetrieveAsync(query, version, vector.Vector, provider.ProviderName, provider.ModelName, ct);
+                }
+                catch (Exception fallback)
+                {
+                    denseFailed = true;
+                    _logger.LogWarning(fallback, "Ollama embedding retrieval also unavailable; using keyword-only.");
+                }
+            }
+            else
+            {
+                denseFailed = true;
+                _logger.LogWarning(ex, "Ollama embedding retrieval unavailable; falling back to keyword-only.");
+            }
         }
 
         var keyword = await KeywordRetrieveAsync(query, version, ct);
@@ -118,6 +146,9 @@ public sealed class RetrievalService : IRetrievalService
         };
     }
 
+    private Task<bool> HasEmbeddingIndexAsync(string provider, CancellationToken ct) =>
+        _db.PolicyChunkEmbeddings.AsNoTracking().AnyAsync(x => x.Provider == provider, ct);
+
     public async Task<AskResult> AskAsync(string question, string policyNumber, DateTime? incidentDate, CancellationToken ct)
     {
         var policy = await _policies.GetByPolicyNumberAsync(policyNumber, ct)
@@ -164,16 +195,18 @@ public sealed class RetrievalService : IRetrievalService
     }
 
     private async Task<IReadOnlyList<PolicyChunk>> DenseRetrieveAsync(
-        RetrievalQuery query, PolicyVersion version, float[] vector, CancellationToken ct)
+        RetrievalQuery query, PolicyVersion version, float[] vector, string provider, string model, CancellationToken ct)
     {
-        var sql = $"SELECT {ChunkColumns} FROM \"PolicyChunks\" WHERE \"PolicyVersionId\" = @versionId ORDER BY \"Embedding\" <=> @vector LIMIT @take";
+        var sql = $"SELECT {ChunkColumns} FROM \"PolicyChunks\" c JOIN \"PolicyChunkEmbeddings\" e ON e.\"PolicyChunkId\" = c.\"Id\" WHERE c.\"PolicyVersionId\" = @versionId AND e.\"Provider\" = @provider AND e.\"Model\" = @model ORDER BY e.\"Vector\" <=> @vector LIMIT @take";
 
         var versionParam = new NpgsqlParameter("versionId", version.Id);
         var vectorParam = new NpgsqlParameter("vector", new Pgvector.Vector(vector));
         var takeParam = new NpgsqlParameter("take", query.TopK + 3);
+        var providerParam = new NpgsqlParameter("provider", provider);
+        var modelParam = new NpgsqlParameter("model", model);
 
         return await _db.PolicyChunks
-            .FromSqlRaw(sql, versionParam, vectorParam, takeParam)
+            .FromSqlRaw(sql, versionParam, vectorParam, takeParam, providerParam, modelParam)
             .AsNoTracking()
             .ToListAsync(ct);
     }
@@ -185,8 +218,8 @@ public sealed class RetrievalService : IRetrievalService
         if (terms.Count == 0)
             return Array.Empty<PolicyChunk>();
 
-        var conditions = string.Join(" OR ", terms.Select((_, i) => $"\"Content\" ILIKE @p{i}"));
-        var sql = $"SELECT {ChunkColumns} FROM \"PolicyChunks\" WHERE \"PolicyVersionId\" = @versionId AND ({conditions})";
+        var conditions = string.Join(" OR ", terms.Select((_, i) => $"c.\"Content\" ILIKE @p{i}"));
+        var sql = $"SELECT {ChunkColumns} FROM \"PolicyChunks\" c WHERE c.\"PolicyVersionId\" = @versionId AND ({conditions})";
 
         var parameters = new List<NpgsqlParameter> { new("versionId", version.Id) };
         for (var i = 0; i < terms.Count; i++)

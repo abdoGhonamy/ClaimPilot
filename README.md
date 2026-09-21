@@ -16,7 +16,10 @@ supervisor.
 
 For a fully offline safe fallback set `AI__Provider=Deterministic`. It returns the
 standard refusal rather than fabricating policy content. Ollama remains the normal local
-provider; both implementations sit behind `ILLMProvider` and are selected by configuration.
+provider. To fail over chat completions to Gemini when Ollama is unavailable, set
+`GEMINI_API_KEY` in `.env` (or `Gemini__ApiKey` in your secret store); Gemini uses
+`gemini-3.6-flash` by default and can be changed with `GEMINI_CHAT_MODEL`. Embeddings
+continue to use Ollama so existing pgvector data remains compatible.
 
 ## Why it is trustworthy
 

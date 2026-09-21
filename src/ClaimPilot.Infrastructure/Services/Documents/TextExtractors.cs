@@ -21,13 +21,43 @@ public sealed class PdfTextExtractor : IFileTextExtractor
         foreach (var page in pdf.GetPages())
         {
             ct.ThrowIfCancellationRequested();
-            var text = page.Text;
+            var text = ReconstructPageLines(page);
             var section = new ExtractedSection("page", string.Empty, (int)page.Number, text);
             sections.Add(section);
         }
 
         var fullText = string.Join('\n', sections.Select(s => s.Text));
         return Task.FromResult(new ExtractedDocument(fullText, sections));
+    }
+
+    private static string ReconstructPageLines(UglyToad.PdfPig.Content.Page page)
+    {
+        var words = page.GetWords()
+            .Where(w => !string.IsNullOrWhiteSpace(w.Text))
+            .OrderByDescending(w => (double)w.BoundingBox.Bottom)
+            .ThenBy(w => (double)w.BoundingBox.Left)
+            .ToList();
+
+        var lines = new List<string>();
+        var current = new List<string>();
+        double? lineBottom = null;
+        foreach (var w in words)
+        {
+            var bottom = (double)w.BoundingBox.Bottom;
+            var height = (double)w.BoundingBox.Height;
+            if (lineBottom.HasValue && Math.Abs(bottom - lineBottom.Value) > Math.Max(2.0, height * 0.5))
+            {
+                lines.Add(string.Join(" ", current));
+                current = new List<string>();
+            }
+            lineBottom = bottom;
+            current.Add(w.Text);
+        }
+
+        if (current.Count > 0)
+            lines.Add(string.Join(" ", current));
+
+        return string.Join("\n", lines);
     }
 }
 

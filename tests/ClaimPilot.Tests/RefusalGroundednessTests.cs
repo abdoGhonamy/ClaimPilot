@@ -20,6 +20,7 @@ public class RefusalGroundednessTests
             new FakePolicyRepository(_trap.Policy),
             new FakeTraceService(),
             new FakeUsageTracker(),
+            new FakeAiPipelineContext(),
             NullLogger<AskService>.Instance);
 
     [Fact]

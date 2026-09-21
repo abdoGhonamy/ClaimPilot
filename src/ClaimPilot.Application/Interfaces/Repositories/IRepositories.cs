@@ -5,6 +5,7 @@ namespace ClaimPilot.Application.Interfaces.Repositories;
 
 public interface IPolicyRepository
 {
+    Task<IReadOnlyList<Policy>> GetActiveAsync(CancellationToken ct);
     Task<Policy?> GetByPolicyNumberAsync(string policyNumber, CancellationToken ct);
     Task<Policy?> GetByIdAsync(Guid id, CancellationToken ct);
     Task<PolicyVersion?> GetApplicableVersionAsync(Guid policyId, DateTime incidentDate, CancellationToken ct);
@@ -12,9 +13,26 @@ public interface IPolicyRepository
     Task<IReadOnlyList<PolicyVersion>> GetVersionsAsync(Guid policyId, CancellationToken ct);
     Task<IReadOnlyList<CoverageItem>> GetCoverageItemsAsync(Guid versionId, CancellationToken ct);
     Task<IReadOnlyList<Exclusion>> GetExclusionsAsync(Guid versionId, CancellationToken ct);
+    Task<IReadOnlyList<PolicyChunk>> GetChunksAsync(Guid versionId, CancellationToken ct);
     Task AddAsync(Policy policy, CancellationToken ct);
     Task AddVersionAsync(PolicyVersion version, CancellationToken ct);
+
+    /// <summary>
+    /// Inserts coverage items and exclusions for a wording version, skipping codes that
+    /// already exist for that version. Returns inserted/skipped counts per type.
+    /// </summary>
+    Task<StructuredSeedResult> SeedStructuredDataAsync(
+        Guid policyVersionId,
+        IEnumerable<CoverageItem> coverage,
+        IEnumerable<Exclusion> exclusions,
+        CancellationToken ct);
 }
+
+public sealed record StructuredSeedResult(
+    int CoverageItemsInserted,
+    int CoverageItemsSkipped,
+    int ExclusionsInserted,
+    int ExclusionsSkipped);
 
 public interface IClaimRepository
 {

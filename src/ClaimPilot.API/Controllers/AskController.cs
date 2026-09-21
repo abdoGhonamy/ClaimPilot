@@ -8,7 +8,7 @@ namespace ClaimPilot.API.Controllers;
 
 [ApiController]
 [Route("api/ask")]
-[Authorize(Roles = "Adjuster,Supervisor")]
+[Authorize(Roles = "Adjuster,Supervisor,Director")]
 public sealed class AskController : ControllerBase
 {
     private readonly AskService _ask;

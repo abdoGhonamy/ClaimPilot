@@ -8,7 +8,7 @@ namespace ClaimPilot.API.Controllers;
 
 [ApiController]
 [Route("api/statistics")]
-[Authorize(Roles = "Supervisor")]
+[Authorize(Roles = "Supervisor,Director")]
 public sealed class StatisticsController : ControllerBase
 {
     private readonly IReviewStatisticsService _statistics;

@@ -19,6 +19,13 @@ namespace ClaimPilot.Tests;
 
 public sealed record TrapPolicyVersions(Policy Policy, PolicyVersion V1, PolicyVersion V2);
 
+public sealed class FakeAiPipelineContext : IAiPipelineContext
+{
+    public AiPipeline Current { get; private set; } = AiPipeline.Gemini;
+    public string? FallbackReason { get; private set; }
+    public void Select(AiPipeline pipeline, string? reason = null) => (Current, FallbackReason) = (pipeline, reason);
+}
+
 public static class TestCorpus
 {
     public static Guid PolicyId { get; } = Guid.NewGuid();
@@ -65,6 +72,9 @@ public sealed class FakePolicyRepository : IPolicyRepository
 
     public FakePolicyRepository(params Policy[] policies) => _policies = policies.ToList();
 
+    public Task<IReadOnlyList<Policy>> GetActiveAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<Policy>>(_policies.Where(p => p.Status == PolicyStatus.Active).ToList());
+
     public Task<Policy?> GetByPolicyNumberAsync(string policyNumber, CancellationToken ct)
         => Task.FromResult(_policies.FirstOrDefault(p => p.PolicyNumber == policyNumber));
 
@@ -97,6 +107,14 @@ public sealed class FakePolicyRepository : IPolicyRepository
     public Task<IReadOnlyList<Exclusion>> GetExclusionsAsync(Guid versionId, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<Exclusion>>(new List<Exclusion>());
 
+    public Task<IReadOnlyList<PolicyChunk>> GetChunksAsync(Guid versionId, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<PolicyChunk>>(_policies
+            .SelectMany(policy => policy.Versions)
+            .Where(version => version.Id == versionId)
+            .SelectMany(version => version.Chunks)
+            .OrderBy(chunk => chunk.Page)
+            .ToList());
+
     public Task AddAsync(Policy policy, CancellationToken ct)
     {
         _policies.Add(policy);
@@ -105,6 +123,15 @@ public sealed class FakePolicyRepository : IPolicyRepository
 
     public Task AddVersionAsync(PolicyVersion version, CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task<StructuredSeedResult> SeedStructuredDataAsync(
+        Guid policyVersionId,
+        IEnumerable<CoverageItem> coverage,
+        IEnumerable<Exclusion> exclusions,
+        CancellationToken ct = default)
+        => Task.FromResult(new StructuredSeedResult(
+            coverage.Count(), 0,
+            exclusions.Count(), 0));
 }
 
 public sealed class FakeRetrievalService : IRetrievalService
@@ -329,6 +356,8 @@ public sealed class FakeToolRegistry : IToolRegistry
     public List<ToolCallRecord> Calls { get; } = new();
     public IReadOnlyList<CoverageLine> CoverageItems { get; init; } = Array.Empty<CoverageLine>();
     public IReadOnlyList<PolicyExclusionLine> Exclusions { get; init; } = Array.Empty<PolicyExclusionLine>();
+    public IReadOnlyDictionary<string, ExclusionCheckResult> ExclusionCheckResults { get; init; }
+        = new Dictionary<string, ExclusionCheckResult>(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<ToolDefinition> Definitions => Array.Empty<ToolDefinition>();
 
@@ -349,7 +378,10 @@ public sealed class FakeToolRegistry : IToolRegistry
                 Guid.NewGuid(), Guid.NewGuid(), 1, new DateTime(2022, 1, 1),
                 CoverageItems, Exclusions)),
             ToolName.ListCoverageItems => JsonSerializer.Serialize(CoverageItems),
-            ToolName.CheckExclusion => JsonSerializer.Serialize(new ExclusionCheckResult(false, null, null, null)),
+            ToolName.CheckExclusion => JsonSerializer.Serialize(
+                ExclusionCheckResults.TryGetValue(parameters["exclusion_code"], out var result)
+                    ? result
+                    : new ExclusionCheckResult(false, null, null, null)),
             ToolName.RecordAnomaly => JsonSerializer.Serialize(new { written = true }),
             ToolName.DraftAdjudication => JsonSerializer.Serialize(new DraftAdjudicationResult(true, "pending-1", null)),
             _ => "{}"

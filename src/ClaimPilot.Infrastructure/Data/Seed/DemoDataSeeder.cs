@@ -19,13 +19,13 @@ namespace ClaimPilot.Infrastructure.Data.Seed;
 public sealed class DemoDataSeeder
 {
     private readonly AppDbContext _db;
-    private readonly IEmbeddingProvider _embeddings;
+    private readonly IEmbeddingProviderResolver _embeddingProviders;
     private readonly ILogger<DemoDataSeeder> _logger;
 
-    public DemoDataSeeder(AppDbContext db, IEmbeddingProvider embeddings, ILogger<DemoDataSeeder> logger)
+    public DemoDataSeeder(AppDbContext db, IEmbeddingProviderResolver embeddingProviders, ILogger<DemoDataSeeder> logger)
     {
         _db = db;
-        _embeddings = embeddings;
+        _embeddingProviders = embeddingProviders;
         _logger = logger;
     }
 
@@ -36,7 +36,8 @@ public sealed class DemoDataSeeder
 
         var policies = new Dictionary<string, Policy>();
         var versions = new Dictionary<(string PolicyNumber, int Version), PolicyVersion>();
-        var embeddingEnabled = await TryProbeEmbeddingAsync(ct);
+        var ollamaEmbeddings = _embeddingProviders.Get(AiPipeline.Ollama);
+        var embeddingEnabled = await TryProbeEmbeddingAsync(ollamaEmbeddings, ct);
 
         foreach (var spec in CorpusSpec.All)
         {
@@ -100,12 +101,14 @@ public sealed class DemoDataSeeder
                 {
                     try
                     {
-                        var result = await _embeddings.EmbedAsync(section.Text, ct);
+                        var result = await ollamaEmbeddings.EmbedAsync(section.Text, ct);
                         chunk.Embedding = result.Vector;
+                        chunk.Embeddings.Add(NewEmbedding(chunk, result));
                     }
                     catch (Exception ex)
                     {
                         chunk.Embedding = DeterministicEmbedding(section.Text);
+                        chunk.Embeddings.Add(NewLegacyOllamaEmbedding(chunk));
                         _logger.LogDebug(ex, "Embedding failed for {Clause}; using deterministic fallback.",
                             section.Clause);
                     }
@@ -113,6 +116,7 @@ public sealed class DemoDataSeeder
                 else
                 {
                     chunk.Embedding = DeterministicEmbedding(section.Text);
+                    chunk.Embeddings.Add(NewLegacyOllamaEmbedding(chunk));
                 }
 
                 _db.PolicyChunks.Add(chunk);
@@ -120,6 +124,7 @@ public sealed class DemoDataSeeder
         }
 
         await _db.SaveChangesAsync(ct);
+        await SeedGeminiEmbeddingsAsync(ct);
         await SeedClaimsAsync(ct);
 
         _logger.LogInformation(
@@ -171,11 +176,39 @@ public sealed class DemoDataSeeder
         }
     }
 
-    private async Task<bool> TryProbeEmbeddingAsync(CancellationToken ct)
+    private static PolicyChunkEmbedding NewEmbedding(PolicyChunk chunk, EmbeddingResult result) => new()
+    {
+        PolicyChunk = chunk, Provider = result.Provider, Model = result.Model, Vector = result.Vector
+    };
+
+    private static PolicyChunkEmbedding NewLegacyOllamaEmbedding(PolicyChunk chunk) => new()
+    {
+        PolicyChunk = chunk, Provider = "ollama", Model = "deterministic-local-fallback", Vector = chunk.Embedding!
+    };
+
+    private async Task SeedGeminiEmbeddingsAsync(CancellationToken ct)
     {
         try
         {
-            await _embeddings.EmbedAsync("probe", ct);
+            var provider = _embeddingProviders.Get(AiPipeline.Gemini);
+            var chunks = await _db.PolicyChunks.Include(x => x.Embeddings).ToListAsync(ct);
+            var missing = chunks.Where(x => x.Embeddings.All(e => e.Provider != provider.ProviderName)).ToList();
+            if (missing.Count == 0) return;
+            var vectors = await provider.EmbedBatchAsync(missing.Select(x => x.Content).ToList(), ct);
+            for (var i = 0; i < missing.Count; i++) missing[i].Embeddings.Add(NewEmbedding(missing[i], vectors[i]));
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Gemini embeddings deferred; the complete Ollama pipeline remains available.");
+        }
+    }
+
+    private async Task<bool> TryProbeEmbeddingAsync(IEmbeddingProvider provider, CancellationToken ct)
+    {
+        try
+        {
+            await provider.EmbedAsync("probe", ct);
             return true;
         }
         catch
