@@ -45,6 +45,11 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
         string policyNumber, int version, DateTime effectiveDate, string fileName,
         string contentType, Stream content, CancellationToken ct)
     {
+        // Npgsql 9+ requires Kind=Utc when projecting DateTime onto a
+        // "timestamp with time zone" column; an Unspecified kind raised
+        // DbUpdateException/500 during chunk persistence. Normalize once here
+        // so every effective-date write path uses UTC.
+        effectiveDate = DateTime.SpecifyKind(effectiveDate, DateTimeKind.Utc);
         var extractor = _extractors.FirstOrDefault(e => e.Supports(contentType, fileName));
         if (extractor is null)
         {

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 using ClaimPilot.Application.Interfaces.Documents;
@@ -5,83 +6,153 @@ using ClaimPilot.Application.Interfaces.Documents;
 namespace ClaimPilot.Infrastructure.Services.Documents;
 
 /// <summary>
-/// Structural chunking strategy. Rather than fixed page-sized slices, chunks are
-/// derived from detected sections, clauses, benefits, exclusions and limits.
+/// Heading-aware chunking strategy. Splits the document text at detected
+/// headings (known insurance headings, markdown "#" lines, numbered headings)
+/// and emits one or more chunks per section. Sets Section, Clause and Page on
+/// every chunk so citations and downstream extraction can reference exact
+/// locations.
 /// </summary>
 public sealed class StructuralChunkingStrategy : IChunkingStrategy
 {
-    private static readonly Regex ClausePattern = new(
-        @"^\s*\d+(\.\d+)*[a-z]?[\.\)]\s+\S+",
+    private const int MaxChunkChars = 1000;
+    private const int MaxSectionChars = 200;
+
+    private static readonly HashSet<string> KnownHeadings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Declarations",
+        "Insuring Agreement",
+        "Covered Perils",
+        "Exclusions",
+        "Conditions",
+        "Policy Conditions and Claim Procedures",
+        "Claims & Incident Reporting",
+        "Limits of Liability",
+        "Deductible",
+        "Coinsurance",
+        "Definitions",
+        "Execution"
+    };
+
+    private static readonly Regex MarkdownHeading = new(
+        @"^#{1,6}\s+(?<t>.+?)\s*$",
         RegexOptions.Compiled);
 
-    private const int MaxChunkLength = 1200;
+    private static readonly Regex NumberedHeading = new(
+        @"^(?:SECTION\s+\d+[\.:]?|\d+\.)\s+(?<t>\S.{0,80})$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public IReadOnlyList<IngestedChunkPayload> Chunk(ExtractedDocument document)
+    public IReadOnlyList<IngestedChunkPayload> Chunk(ExtractedDocument doc)
     {
         var chunks = new List<IngestedChunkPayload>();
-        var currentSection = "general";
-        var currentClause = string.Empty;
-        var buffer = new List<string>();
+        var buffer = new StringBuilder();
+        var currentSection = "General";
+        int? currentPage = null;
 
-        foreach (var section in document.Sections)
+        void Flush()
         {
-            if (!string.IsNullOrWhiteSpace(section.Title) && section.Title != "page")
+            var text = buffer.ToString().Trim();
+            buffer.Clear();
+            if (text.Length == 0) return;
+
+            var parts = SplitAtBoundaries(text, MaxChunkChars);
+            for (var i = 0; i < parts.Count; i++)
             {
-                Flush(buffer, chunks, currentSection, currentClause);
-                currentSection = Normalize(section.Title);
-                currentClause = string.Empty;
-            }
+                var clause = parts.Count == 1
+                    ? currentSection
+                    : $"{currentSection} ({i + 1})";
 
-            var text = section.Text;
-            var lines = text.Split('\n');
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Length == 0) continue;
-
-                var match = ClausePattern.Match(trimmed);
-                if (match.Success)
+                chunks.Add(new IngestedChunkPayload
                 {
-                    Flush(buffer, chunks, currentSection, currentClause);
-                    currentClause = Normalize(trimmed);
-                }
-
-                if (trimmed.StartsWith("## ", StringComparison.OrdinalIgnoreCase) ||
-                    trimmed.StartsWith("### ", StringComparison.OrdinalIgnoreCase))
-                {
-                    Flush(buffer, chunks, currentSection, currentClause);
-                    currentSection = Normalize(trimmed.TrimStart('#').Trim());
-                }
-
-                buffer.Add(trimmed);
-                if (buffer.Sum(b => b.Length) >= MaxChunkLength)
-                    Flush(buffer, chunks, currentSection, currentClause);
+                    Content = parts[i],
+                    Section = Truncate(currentSection, MaxSectionChars),
+                    Clause = Truncate(clause, MaxSectionChars),
+                    Page = currentPage
+                });
             }
         }
 
-        Flush(buffer, chunks, currentSection, currentClause);
+        foreach (var section in doc.Sections)
+        {
+            var normalized = PolicyTextNormalizer.Normalize(section.Text ?? string.Empty);
+            foreach (var rawLine in normalized.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0) continue;
+
+                var heading = DetectHeading(line);
+                if (heading is not null)
+                {
+                    Flush();
+                    currentSection = heading;
+                    currentPage = section.Page;
+                    continue;
+                }
+
+                currentPage ??= section.Page;
+                buffer.AppendLine(line);
+            }
+        }
+
+        Flush();
         return chunks;
     }
 
-    private static void Flush(List<string> buffer, List<IngestedChunkPayload> chunks, string section, string clause)
+    private static string? DetectHeading(string line)
     {
-        if (buffer.Count == 0) return;
-        var content = string.Join(' ', buffer).Trim();
-        if (content.Length > 0)
-        {
-            chunks.Add(new IngestedChunkPayload
-            {
-                Content = content,
-                Section = section,
-                Clause = clause
-            });
-        }
-        buffer.Clear();
+        var trimmed = line.TrimEnd(':').Trim();
+
+        if (KnownHeadings.Contains(trimmed))
+            return trimmed;
+
+        var md = MarkdownHeading.Match(line);
+        if (md.Success) return md.Groups["t"].Value.Trim().TrimEnd(':').Trim();
+
+        var num = NumberedHeading.Match(line);
+        if (num.Success) return num.Groups["t"].Value.Trim().TrimEnd(':').Trim();
+
+        return null;
     }
 
-    private static string Normalize(string value)
+    private static List<string> SplitAtBoundaries(string text, int max)
     {
-        var cleaned = Regex.Replace(value, @"\s+", " ").Trim();
-        return cleaned.Length > 200 ? cleaned[..200] : cleaned;
+        if (text.Length <= max) return new List<string> { text };
+
+        var result = new List<string>();
+        var current = new StringBuilder();
+
+        // Prefer paragraph boundaries, then sentence boundaries.
+        foreach (var paragraph in Regex.Split(text, @"\n{2,}"))
+        {
+            var block = paragraph.Trim();
+            if (block.Length == 0) continue;
+
+            if (block.Length <= max)
+            {
+                if (current.Length + block.Length + 2 > max && current.Length > 0)
+                {
+                    result.Add(current.ToString().Trim());
+                    current.Clear();
+                }
+                current.Append(block).Append("\n\n");
+                continue;
+            }
+
+            // Paragraph too large: split at sentence boundaries.
+            foreach (var sentence in Regex.Split(block, @"(?<=[\.\!\?])\s+"))
+            {
+                if (current.Length + sentence.Length > max && current.Length > 0)
+                {
+                    result.Add(current.ToString().Trim());
+                    current.Clear();
+                }
+                current.Append(sentence).Append(' ');
+            }
+        }
+
+        if (current.Length > 0) result.Add(current.ToString().Trim());
+        return result;
     }
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value.Substring(0, max);
 }

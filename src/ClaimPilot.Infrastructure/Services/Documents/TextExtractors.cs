@@ -72,25 +72,11 @@ public sealed class MarkdownTextExtractor : IFileTextExtractor
     public Task<ExtractedDocument> ExtractAsync(Stream content, string fileName, CancellationToken ct)
     {
         using var reader = new StreamReader(content);
-        var text = reader.ReadToEnd();
-        var sections = new List<ExtractedSection>();
-        foreach (var line in text.Split('\n'))
+        var text = reader.ReadToEnd().Replace("\r\n", "\n");
+        var sections = new List<ExtractedSection>
         {
-            if (line.StartsWith('#') && line.Trim().Length > 2)
-            {
-                var title = line.Trim().TrimStart('#').Trim();
-                sections.Add(new ExtractedSection(title, string.Empty, null, string.Empty));
-            }
-            else if (sections.Count > 0)
-            {
-                var last = sections[^1];
-                sections[^1] = new ExtractedSection(last.Title, last.Clause, last.Page, last.Text + line + "\n");
-            }
-            else
-            {
-                sections.Add(new ExtractedSection("README", string.Empty, null, line + "\n"));
-            }
-        }
+            new ExtractedSection("markdown", string.Empty, null, text)
+        };
         return Task.FromResult(new ExtractedDocument(text, sections));
     }
 }
@@ -119,12 +105,11 @@ public sealed class DocxTextExtractor : IFileTextExtractor
             .ToList();
 
         var fullText = string.Join('\n', paragraphs);
-        var sections = paragraphs.Select(p =>
-            new ExtractedSection(Truncate(p, 40), string.Empty, null, p)).ToList();
+        var sections = new List<ExtractedSection>
+        {
+            new ExtractedSection("docx", string.Empty, null, fullText)
+        };
 
         return Task.FromResult(new ExtractedDocument(fullText, sections));
     }
-
-    private static string Truncate(string value, int max)
-        => value.Length <= max ? value : value[..max];
 }
