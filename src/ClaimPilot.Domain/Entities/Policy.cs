@@ -44,4 +44,17 @@ public class PolicyChunk
     public required string ContentHash { get; set; }
     public int? TokenCount { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public ICollection<PolicyChunkEmbedding> Embeddings { get; set; } = new List<PolicyChunkEmbedding>();
+}
+
+/// <summary>Provider-isolated vector representation. Never compare vectors across providers.</summary>
+public class PolicyChunkEmbedding
+{
+    public Guid Id { get; set; }
+    public Guid PolicyChunkId { get; set; }
+    public required PolicyChunk PolicyChunk { get; set; }
+    public required string Provider { get; set; }
+    public required string Model { get; set; }
+    public required float[] Vector { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

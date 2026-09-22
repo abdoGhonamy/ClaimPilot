@@ -95,6 +95,22 @@ reassign first; unassigned items → 409). `ApprovalService.AssignAsync` sets
 
 ## Pipeline & operations
 
+## Provider-isolated AI pipelines
+
+Each request chooses one complete pipeline before dense retrieval:
+
+```
+Gemini: Gemini embeddings -> Gemini rows in PolicyChunkEmbeddings -> Gemini generation
+Ollama: Ollama embeddings -> Ollama rows in PolicyChunkEmbeddings -> Ollama generation
+```
+
+Gemini is the default. If its embedding index/API is unavailable, the request switches to
+Ollama before retrieval. If Gemini generation fails, the RAG request is restarted on Ollama,
+so an Ollama answer never uses Gemini vectors. `PolicyChunkEmbeddings` stores provider and
+model with each 768-dimensional vector; its migration copies legacy vectors into the Ollama
+pipeline and creates partial HNSW indexes per provider. A new seed attempts both providers;
+when Gemini credentials are absent, it records only local Ollama vectors.
+
 - Startup: migrations ➜ identity seed (3 roles/users) ➜ `DemoDataSeeder` (idempotent corpus
   + 12 claims; embeddings via Ollama with a deterministic fallback).
 - CI: build + unit tests + `docker compose config` validation (`.github/workflows/ci.yml`).

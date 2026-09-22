@@ -12,11 +12,30 @@ answer text, refusal correctness and citations, writes a timestamped JSON report
 non-zero when any case fails.
 
 ```bash
-dotnet run --project tools/ClaimPilot.Evaluation -- --base-url http://localhost:5028
+dotnet run --project tools/ClaimPilot.Evaluation -- --base-url http://localhost:8080
 ```
 
 Use `--category PromptInjection` for the adversarial subset or `--report artifacts/baseline.json`
 to choose the report file.
+
+## Adjudication-agent evaluation
+
+The harness also evaluates the real SSE endpoint used by the adjudication workflow:
+
+```bash
+dotnet run --project tools/ClaimPilot.Evaluation -- --mode adjudication --base-url http://localhost:8080
+```
+
+It creates three isolated claims and calls `POST /api/claims/{claimId}/adjudicate` for each.
+The report verifies the structured `agent_completed` SSE output of the three specialists:
+
+1. **Coverage Matcher** selects the policy version effective on the incident date.
+2. **Exclusion Analyst** detects the seeded `EX-9` mechanical-breakdown exclusion.
+3. **Anomaly Detector** flags the deterministic `high_claim_ratio` heuristic.
+
+The report includes every observed SSE event, so a failure can be traced to a specific agent
+rather than being reported as a generic endpoint failure. The command exits non-zero if any
+agent is absent, emits an error event, or violates its case's ground truth.
 
 ## Metrics
 

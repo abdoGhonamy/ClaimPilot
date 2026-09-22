@@ -14,6 +14,7 @@ public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole,
     public DbSet<Policy> Policies => Set<Policy>();
     public DbSet<PolicyVersion> PolicyVersions => Set<PolicyVersion>();
     public DbSet<PolicyChunk> PolicyChunks => Set<PolicyChunk>();
+    public DbSet<PolicyChunkEmbedding> PolicyChunkEmbeddings => Set<PolicyChunkEmbedding>();
     public DbSet<CoverageItem> CoverageItems => Set<CoverageItem>();
     public DbSet<Exclusion> Exclusions => Set<Exclusion>();
     public DbSet<Claim> Claims => Set<Claim>();
@@ -85,6 +86,19 @@ public sealed class AppDbContext : IdentityDbContext<IdentityUser, IdentityRole,
                 .HasColumnType("vector(768)");
             e.HasIndex(x => new { x.PolicyVersionId, x.ContentHash }).IsUnique();
             e.HasIndex(x => new { x.PolicyVersionId, x.Section });
+            e.HasMany(x => x.Embeddings).WithOne(x => x.PolicyChunk).HasForeignKey(x => x.PolicyChunkId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PolicyChunkEmbedding>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Provider).IsRequired().HasMaxLength(32);
+            e.Property(x => x.Model).IsRequired().HasMaxLength(128);
+            e.Property(x => x.Vector).IsRequired().HasConversion(
+                v => new Pgvector.Vector(v), v => v.ToArray()).HasColumnType("vector(768)");
+            e.HasIndex(x => new { x.PolicyChunkId, x.Provider, x.Model }).IsUnique();
+            e.HasIndex(x => x.Provider);
         });
 
         b.Entity<CoverageItem>(e =>

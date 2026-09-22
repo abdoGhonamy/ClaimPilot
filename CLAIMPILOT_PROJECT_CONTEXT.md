@@ -1,9 +1,10 @@
 # ClaimPilot — AI-Powered Insurance Claims Adjudication Copilot
 ## Complete Project Context / AI Handoff Document
 
-> 	Generated from the **actual codebase** on 2026-09-11 (git branch `AbdelbadeaLaptop`, `net10.0`).
-> 	This document describes what the code **actually does**. Nothing is invented. Where a behavior could not be proven from code alone it is explicitly marked `NEEDS CODE VERIFICATION`.
-> 	Secrets are redacted (`<REDACTED>`).
+> Generated from the **actual codebase** on 2026-09-14 (git branch `main`, HEAD `f8f177e`, `net10.0`) — supersedes the v1.0.0 snapshot (`4f48071` on `AbdelbadeaLaptop`) and all post-handoff commits.
+> REVISED after the post-handoff feature/fix commits: Exclusion Analyst bug FIXED, decision-letter finalization, claim intake + document upload + disk storage, approval-authority model (Director role, per-role thresholds, assignee-only approve/reject/edit), assignment routing at approval-item creation, `GET .../runs` FIXED, enums-as-JSON-strings, 95 unit tests, 3 migrations, Docker/compose + CI, docs/README/PR templates, and extraction refactors.
+> This document describes what the code **actually does**. Nothing is invented. Where a behavior could not be proven from code alone it is explicitly marked `NEEDS CODE VERIFICATION`.
+> Secrets are redacted (`<REDACTED>`).
 
 ---
 
@@ -15,44 +16,46 @@
 | **Solution file** | `ClaimPilot.slnx` |
 | **Repository root** | `/home/abdelbadea/API/Insurance_claims_adjudication/InsuranceClaimsCopilot/` |
 | **.NET version** | `net10.0` (SDK 10.0.x) |
-| **Project style** | Clean Architecture (Domain / Application / Infrastructure / API) + one (empty) test project |
+| **Project style** | Clean Architecture (Domain / Application / Infrastructure / API) + a test project (`ClaimPilot.Tests`, 95 unit tests) |
 | **Database** | PostgreSQL via EF Core 10 + Npgsql (NodaTime enabled in package refs) |
 | **Vector DB** | Same PostgreSQL instance using the `pgvector` extension (`vector(768)` column) |
 | **LLM provider** | Ollama only (`OllamaLLMProvider`) — default chat model `llama3.2` |
 | **Embedding model** | Ollama `nomic-embed-text` (768 dimensions) via `OllamaEmbeddingProvider` |
 | **Frontend** | **NOT IMPLEMENTED** — no frontend project/folder exists. API only (SSE endpoint exists for a future UI) |
-| **Authentication** | ASP.NET Core Identity + JWT Bearer (HS256), roles Adjuster/Supervisor/Viewer |
+| **Authentication** | ASP.NET Core Identity + JWT Bearer (HS256), roles Adjuster/Supervisor/Director/Viewer |
 | **Realtime** | SSE endpoint on `POST /api/claims/{claimId}/adjudicate` (live orchestrator events) |
 | **External services** | Ollama (LLM + embeddings), PostgreSQL (pgvector), Redis (optional), no cloud services |
-| **Status** | Implemented skeleton of the whole pipeline; several features are **NOT IMPLEMENTED** or **BROKEN at runtime** (see Section 39) |
+| **Status** | **Post-v1.0.0 (`main` @ `f8f177e`).** Full pipeline implemented: the Exclusion-Analyst parse bug is **FIXED**; approval finalizes the decision and issues a `DecisionLetter`; **claim intake** (`POST /api/claims`) + **document upload/disk storage**; **approval-authority model** (Adjuster/Supervisor/Director amount thresholds; approve/reject/edit limited to the item's assigned role) and **assignment routing at creation**; **`GET .../runs` FIXED**; **95 unit tests**, 3 migrations, Docker/compose + CI, docs/README. Remaining gaps (Section 39): fake "degraded RAG" fallback, no reject-letter path, no frontend, no evaluation harness, allow-all CORS, no rate limiting |
 
 ## Feature implementation status (honest)
 
 | Feature | Status |
 |---|---|
-| Claims CRUD/list/get/runs/trace | IMPLEMENTED (list/get/trace; "runs" endpoint suspected broken — see 39) |
-| Adjudication orchestrator (supervisor loop) | IMPLEMENTED, but **always degrades at runtime** because the Exclusion Analyst agent throws (`JsonException`) — see 39 |
+| Claims CRUD + documents | IMPLEMENTED — list/get/trace; **`POST /api/claims`** (create; per-year sequential ClaimNumber; audit "Created"); **`POST /api/claims/{claimId}/documents`** (upload; 20 MB; allow-list pdf/jpg/png/webp/heic + magic-byte sniff; stored under `uploads/`); **`.../runs` FIXED** — `GetByIdAsync` now `Include(Runs→ApprovalItems/Anomalies/FinalDecision) + Documents` |
+| Adjudication orchestrator (supervisor loop) | IMPLEMENTED (fixed 4-agent order, version pinning, retry/backoff, timeout, SSE, approval-item creation) |
 | Coverage Matcher agent | IMPLEMENTED (fully deterministic, no LLM call despite injecting one) |
-| Exclusion Analyst agent | IMPLEMENTED but **BROKEN**: deserializes a `PolicyMatchResult` object as `List<ExclusionCandidate>`, which always throws. See 39 |
-| Anomaly Detector agent | IMPLEMENTED (deterministic heuristics only, no LLM) |
-| Adjudication Drafter agent | IMPLEMENTED (decision + amount deterministic; LLM writes rationale prose only) |
-| Deterministic adjudication engine | IMPLEMENTED (pure arithmetic, `DeterministicAdjudicationEngine`) |
-| Human review queue | IMPLEMENTED (`ApprovalService` + `ApprovalRepository`, state machine) |
-| SLA escalation worker | IMPLEMENTED (`SlaEscalationWorker` background service, Redis lock) |
+| Exclusion Analyst agent | **FIXED** — deserializes `PolicyMatchResult` directly; LLM shortlists plausible exclusions; each is verified deterministically via the `check_exclusion` tool |
+| Anomaly Detector agent | IMPLEMENTED (deterministic heuristics only, no LLM; persists anomalies via `record_anomaly`) |
+| Adjudication Drafter agent | IMPLEMENTED (decision + amount deterministic from engine state; LLM writes rationale prose only; persists the draft via the gated `draft_adjudication` tool) |
+| Deterministic adjudication engine | IMPLEMENTED (pure arithmetic, `DeterministicAdjudicationEngine`, unit-tested) |
+| Human review queue | IMPLEMENTED (`ApprovalService` + `ApprovalRepository`, state machine, unit-tested) |
+| SLA escalation worker | IMPLEMENTED (`SlaEscalationWorker` background service, Redis lock) — role-based: Adjuster-assigned pending > 8h → Supervisor; Supervisor > 16h → Director; unassigned > 2h routed by priority (Critical→Director, High→Supervisor, else Adjuster); `AssignedAt` reset on reassign |
+| Approval authority model | IMPLEMENTED — `AuthorityService : IAuthorityService` + `ApprovalAuthorityOptions` (Adjuster $10,000 / Supervisor $100,000 / Director $1,000,000,000); `RequireApprovalAuthorityAttribute` gates Approve/Reject/Edit: caller must **hold the item's `AssignedTo` role** and, for Approve/Edit, amount ≤ role threshold (else 403; unassigned item → 409) |
+| Assignment routing | IMPLEMENTED — `AssignmentRouter.Compute(priority, amount, authority)` picks `AssigneeRole` (tier from priority, bumped by amount) and `SupervisorOrchestrator` sets `AssignedTo`+`AssignedAt` when creating the approval item; `Director` role + `director` demo user |
 | Hybrid RAG (dense + keyword, RRF) | IMPLEMENTED (`RetrievalService`), HNSW index created by migration |
-| Grounded Ask (Q&A with refusal) | IMPLEMENTED (`AskService` in Application + `IRetrievalService.AskAsync` in Infra — duplicated logic) |
+| Grounded Ask (Q&A with refusal) | IMPLEMENTED (`AskService` in Application + `IRetrievalService.AskAsync` in Infra — **duplicated logic**, only Application one wired) |
 | Vector version-scoped retrieval | IMPLEMENTED (query pinned to `PolicyVersionId` before any search) |
-| Policy version selection by incident date | IMPLEMENTED (`GetApplicableVersionAsync`, effective-date ordering) |
+| Policy version selection by incident date | IMPLEMENTED (`ApplicableVersionRule.Select` in Domain, `GetApplicableVersionAsync` delegates to it; unit-tested version traps) |
 | Document ingestion (pdf/md/docx) | IMPLEMENTED (structural chunking, SHA-256 idempotency) |
 | Embeddings | IMPLEMENTED (Ollama) + deterministic 768-d fallback vector used by seeder |
-| Decision letters | NOT IMPLEMENTED — `DecisionLetter` entity exists but nothing ever creates one |
-| Final decision persistence | NOT IMPLEMENTED — nothing sets `AdjudicationRun.FinalDecision` or creates an `IsFinal = true` `Decision`; `ApprovalService.Approve` only flips the `ApprovalItem` status |
+| Decision letters | **IMPLEMENTED** — `ApprovalService.FinalizeDecisionAsync` builds letter text and persists `DecisionLetter` on supervisor approval |
+| Final decision persistence | **IMPLEMENTED** — `ApproveAsync` marks the draft `Decision` `IsFinal=true`, links `ApprovalItemId`, sets `AdjudicationRun.FinalDecisionId`, issues the letter + audit row |
 | Evaluation harness (EvaluationCorpus) | PARTIALLY IMPLEMENTED — dataset defined (26 cases) but **no code executes it** |
-| Tests | NOT IMPLEMENTED — `ClaimPilot.Tests` project exists with xunit/FluentAssertions references and empty `Unit/` + `Integration/` folders, **zero test files** |
-| Docker / docker-compose / CI / k8s | NOT IMPLEMENTED — no Dockerfile, compose files, or infra-as-code anywhere |
+| Tests | **IMPLEMENTED — 95 tests** (xunit + FluentAssertions) with no external services: engine determinism, version traps, refusal/groundedness, approval state machine (10), role gating (5), JSON extraction, **approval-authority filter (16), claim-documents endpoint (4), create-claim endpoint (6), assignment router (1), authority service (5), missing-documents orchestrator walkthrough (2)** |
+| Docker / docker-compose / CI / k8s | **IMPLEMENTED** — `Dockerfile` + `docker-compose.yml` (pgvector/redis/ollama/api), `docker/initdb/001-vector.sql`, `.env(.example)`, GitHub Actions CI (build + tests + `docker compose config`); no k8s |
 | Frontend | NOT IMPLEMENTED |
-| SSE subscription for UI | PARTIALLY IMPLEMENTED — server emits SSE; no client exists |
-| Prompt-injection protection | PARTIALLY IMPLEMENTED — system-prompt guardrails + groundedness number check in Ask; no output sanitization, no tool-arg validation of free text beyond allow-lists |
+| SSE subscription for UI | IMPLEMENTED (server SSE + channel-drain deadlock fix); no client UI exists |
+| Prompt-injection protection | PARTIALLY IMPLEMENTED — system-prompt guardrails + groundedness number check in Ask (both covered by tests); no output sanitization, no tool-arg validation of free text beyond allow-lists |
 | Rate limiting | NOT IMPLEMENTED |
 | Real audit of model usage cost | PARTIALLY IMPLEMENTED — usage events recorded; Ollama cost is hardcoded `0m` |
 
@@ -63,15 +66,24 @@
 ```text
 InsuranceClaimsCopilot/
 ├── ClaimPilot.slnx
-├── .gitignore
-├── docs/                        (EMPTY)
+├── README.md                        # quick start, containers vs local, test, layout
+├── .env / .env.example              # compose env (ports, db creds, JWT_KEY)
+├── Dockerfile                       # multi-stage SDK build -> aspnet runtime
+├── docker-compose.yml               # db(pgvector pg16) + redis7 + ollama + api
+├── docker/initdb/001-vector.sql     # CREATE EXTENSION vector + schema grants
+├── .github/
+│   ├── workflows/ci.yml             # build + unit tests + docker compose config
+│   └── pull_request_template/       # 8 PR templates (feature/bug-fix/hotfix/...)
+├── docs/                            # ARCHITECTURE, RUNBOOK, CHANGELOG, SECURITY, SYSTEM_EXPLAINER
 ├── src/
 │   ├── ClaimPilot.Domain/                          # Pure domain: entities, enums, VOs, exceptions
 │   │   ├── Entities/ Adjudication.cs, Approval.cs, Claim.cs, Coverage.cs, Policy.cs
 │   │   ├── Enums/ Enums.cs
 │   │   ├── ValueObjects/ ValueObjects.cs        # Citation, ComputationStep, Computation
+│   │   ├── Services/ ApplicableVersionRule.cs   # pure version-selection rule (tested)
 │   │   └── Exceptions/ DomainExceptions.cs
 │   ├── ClaimPilot.Application/                    # Use cases, agents, orchestrator, engine, contracts
+│   │   ├── Common/{GroundednessChecks.cs, JsonExtraction.cs}   # extracted rules (tested)
 │   │   ├── Interfaces/
 │   │   │   ├── Adjudication/IAdjudicationEngine.cs
 │   │   │   ├── AI/IProvider.cs                   # ILLMProvider, IEmbeddingProvider, UsageRecord...
@@ -95,25 +107,31 @@ InsuranceClaimsCopilot/
 │   │   │   ├── AppDbContext.cs                   # DbContext + TraceRecordEntity + UsageRecordEntity
 │   │   │   ├── AppDbContextFactory.cs            # design-time factory for `dotnet ef`
 │   │   │   └── Seed/{CorpusSpec.cs, DemoDataSeeder.cs, EvaluationCorpus.cs}
-│   │   ├── Migrations/  (InitialCreate, UniqueChunkHashPerVersion, model snapshot)
+│   │   ├── Migrations/  (InitialCreate, UniqueChunkHashPerVersion, ChangeAssignedToEnumAndAddAssignedAt)
 │   │   ├── Repositories/{PolicyRepository,ClaimRepository,ChunkRepository,ApprovalRepository,AuditTraceUsageRepositories}.cs
 │   │   └── Services/
 │   │       ├── RetrievalService.cs               # hybrid RAG
-│   │       ├── ToolRegistryService.cs            # tools + allow-list + IToolTraceWriter
+│   │       ├── ToolRegistryService.cs            # tools + allow-list + gated writes + IToolTraceWriter
 │   │       ├── OllamaLLMProvider.cs, OllamaEmbeddingProvider.cs
 │   │       ├── Documents/{DocumentIngestionService,StructuralChunkingStrategy,TextExtractors}.cs
 │   │       ├── AuditTraceUsageServices.cs, ReviewQueueReader.cs, RunTraceViewBuilder.cs
-│   │       ├── SlaEscalationWorker.cs, RedisCache.cs, ToolTraceWriter.cs, UsageEventForwarder.cs
+│   │       ├── SlaEscalationWorker.cs, FileStorageService.cs, RedisCache.cs, ToolTraceWriter.cs, UsageEventForwarder.cs
 │   │   └── DependencyInjection.cs
 │   └── ClaimPilot.API/                           # ASP.NET Core (minimal Program.cs + controllers)
 │       ├── Program.cs
 │       ├── Controllers/{ClaimsController,ReviewController,DocumentsController,AskController,AuthController,AuditController,StatisticsController}.cs
-│       ├── Dtos/Dtos.cs
-│       ├── Auth/{TokenFactory.cs, SeedData.cs}
+│       ├── Dtos/Dtos.cs, CreateClaimRequest.cs, UploadDocumentRequest.cs, ClaimDocumentDto.cs
+│       ├── Auth/{ApprovalAction.cs, RequireApprovalAuthorityAttribute.cs, TokenFactory.cs, SeedData.cs}
 │       ├── Middleware/GlobalExceptionHandler.cs
+│       ├── Helpers/ClaimUploadValidation.cs
 │       ├── appsettings.json, appsettings.Development.json, launchSettings.json
 └── tests/
-    └── ClaimPilot.Tests/                         # EMPTY (csproj only; Unit/ and Integration/ dirs empty)
+    └── ClaimPilot.Tests/                         # 95 tests + Fakes.cs/TestCorpus. Unit/: DeterministicAdjudicationEngine,
+                                                  # ApplicableVersionRule, RefusalGroundedness, ApprovalServiceStateMachine,
+                                                  # JsonExtraction, ReviewRoleGuard, AssignmentRouter, AuthorityService,
+                                                  # CreateClaimEndpoint. Integration/: ApprovalAuthorityFilter,
+                                                  # ClaimDocumentsEndpoint, MissingDocumentsAnomaly (the latter drives the
+                                                  # full SupervisorOrchestrator with fakes → Status "completed")
 ```
 
 ### Project responsibilities & dependencies
@@ -124,7 +142,7 @@ InsuranceClaimsCopilot/
 | `ClaimPilot.Application` | Interfaces (repos, providers, orchestration, review, trace, retrieval), DTO/contract records, the 4 agents, `SupervisorOrchestrator`, `DeterministicAdjudicationEngine`, review/ask/assignment/statistics services, DI. | Domain |
 | `ClaimPilot.Infrastructure` | `AppDbContext`, EF config/migrations, repositories, hybrid retrieval, tool registry, Ollama providers, document ingestion (PdfPig/OpenXml), Redis, background workers, seeders, DI. | Application, Domain |
 | `ClaimPilot.API` | Controllers, JWT/Identity wiring, DTOs, global exception handler, health checks, Swagger, startup seed + migrations. | Application, Infrastructure |
-| `ClaimPilot.Tests` | EMPTY test project (xunit, FluentAssertions, coverlet referenced). | Application, Domain, Infrastructure |
+| `ClaimPilot.Tests` | Unit test project (xunit 2.9.3, FluentAssertions 7.2.2, coverlet 6.0.4, net10.0). **95 tests**, no external services. | Application, Domain, Infrastructure, **API** |
 
 ---
 
@@ -206,11 +224,11 @@ Entities are plain POCOs; all mapping in `AppDbContext`. Enum properties are sto
 
 ### `ClaimDocument` (table `ClaimDocuments`)
 - PK `Id`; FK `ClaimId` (cascade); `FileName`, `ContentType` (max 128), `SizeBytes`, `StoredAt`
-- Note: no claim-document upload endpoint exists; only the entity/table + an ingestion path for *policy* documents.
+- **Populated only via `POST /api/claims/{claimId}/documents`** (Adjuster/Supervisor): validated (type allow-list, 20 MB, magic-byte sniff) then streamed to `Storage:UploadRoot` as `{claimId:N}/{documentId:N}{ext}` — the client file name is **never** used on disk. `documentType` is validated but not persisted (no schema column). `GetByIdAsync` includes `Documents`.
 
 ### `AdjudicationRun` (table `AdjudicationRuns`)
 - PK `Id`; FK `ClaimId` (cascade); `PolicyVersionId` Guid?; `Status` `RunStatus` (**string**), `CorrelationId` string?, `Iteration` int, `MaxIterations` int, `FailReason` string?, `Degraded` bool, timestamps (`CreatedAt`,`StartedAt`,`CompletedAt`,`CancelledAt`)
-- `FinalDecisionId` Guid? + navigation `FinalDecision` (Decision?) — **never set by any code**
+- `FinalDecisionId` Guid? + navigation `FinalDecision` (Decision?) — **set by `ApprovalService.ApproveAsync`** (`FinalizeDecisionAsync`) when a supervisor approves the run's approval item
 - Indexes: `IX_AdjudicationRuns_ClaimId`, `IX_AdjudicationRuns_PolicyVersionId`
 - Navigation: `AgentRuns`, `ApprovalItems` (1–*, FK `RunId`), `Anomalies`, `Decisions` (all cascade except ApprovalItems)
 
@@ -222,14 +240,15 @@ Entities are plain POCOs; all mapping in `AppDbContext`. Enum properties are sto
 
 ### `Decision` (table `Decisions`)
 - PK `Id`; FK `AdjudicationRunId` (cascade); `DecisionType` `DecisionType` (**string**), `ApprovedAmount` decimal?, `Rationale` string?, `CitationsJson` string?, `IsFinal` bool, `ApprovalItemId` Guid?, `CreatedAt`
-- `Decision.Letter` 1–1 `DecisionLetter` (cascade). Only **drafts** (`IsFinal=false`) are ever created (by the `DraftAdjudication` tool).
+- `Decision.Letter` 1–1 `DecisionLetter` (cascade). **Drafts** (`IsFinal=false`) are created by the `DraftAdjudication` tool; `IsFinal=true` is set + `DecisionLetter` issued only by `ApprovalService.FinalizeDecisionAsync` on supervisor approval.
 
 ### `DecisionLetter` (table `DecisionLetters`)
-- PK `Id`; FK `DecisionId` (1–1 from `Decisions`); `LetterText` required; `IssuedBy` Guid; `IssuedAt`. **Nothing creates letters.**
+- PK `Id`; FK `DecisionId` (1–1 from `Decisions`); `LetterText` required; `IssuedBy` Guid; `IssuedAt` (default `UtcNow`). **Created by `ApprovalService.FinalizeDecisionAsync`** when a supervisor approves (only for approved decisions — a rejected claim gets no letter).
 
 ### `ApprovalItem` (table `ApprovalItems`)
-- PK `Id`; `ClaimId` Guid; `RunId` Guid?; `Status` `ApprovalStatus` (**string**), `Priority` `Priority` (**string**), `SLADeadline` DateTime?, `AssignedTo` string?, `Title` string?, `Summary` string?, `CreatedAt`, `ReviewedAt`
+- PK `Id`; `ClaimId` Guid; `RunId` Guid?; `Status` `ApprovalStatus` (**string**), `Priority` `Priority` (**string**), `SLADeadline` DateTime?, `AssignedTo` `AssigneeRole?` (Adjuster/Supervisor/Director — **string** via `HasConversion<string>()`), `AssignedAt` DateTime?, `Title` string?, `Summary` string?, `CreatedAt`, `ReviewedAt`
 - Indexes: `Status`, `SLADeadline`, `AssignedTo`, `RunId`; `History` 1–* cascade (FK `ApprovalItemId`)
+- Migration `20260913205511_ChangeAssignedToEnumAndAddAssignedAt`: re-types `AssignedTo` string→`AssigneeRole?` (string conversion) and adds `AssignedAt`. Set at creation (`SupervisorOrchestrator` + `AssignmentRouter`) and on assign/escalate/SLA-reassign.
 - EF config: `HasMany(x => x.ApprovalItems).WithOne().HasForeignKey(i => i.RunId)` — the ApprovalItem→AdjudicationRun relationship is configured from the Run side without a navigation on ApprovalItem.
 
 ### `ApprovalHistory` (table `ApprovalHistories`)
@@ -280,18 +299,21 @@ Note: `PolicyVersion.SupersedesVersionId` is a bare scalar (no FK/constraint in 
 - **DbSets**: `Policies, PolicyVersions, PolicyChunks, CoverageItems, Exclusions, Claims, ClaimDocuments, AdjudicationRuns, AgentRuns, ApprovalItems, ApprovalHistories, Anomalies, Decisions, DecisionLetters, AuditLogs, TraceRecords, UsageRecords` (+ Identity tables).
 - **pgvector wiring**: `modelBuilder.HasPostgresExtension("vector");` and `npgsql.UseVector()` / `dataSourceBuilder.UseVector()`; `Embedding` stored as `vector(768)` (see Section 13).
 - **Entity configuration**: all in `OnModelCreating` via `ConfigurePolicy/ConfigureClaims/ConfigureRuns/ConfigureApproval/ConfigureTrace` (full detail in Section 4).
-- **Enums as strings**: `Claim.Status`, `AdjudicationRun.Status`, `AgentRun.AgentType/Status`, `Anomaly.Severity`, `Decision.DecisionType`, `ApprovalItem.Status/Priority`, `ApprovalHistory.Action`. `Coverage.Type`, `PolicyStatus`, `PolicyVersionStatus` remain ints.
+- **Enums as strings**: `Claim.Status`, `AdjudicationRun.Status`, `AgentRun.AgentType/Status`, `Anomaly.Severity`, `Decision.DecisionType`, `ApprovalItem.Status/Priority/AssignedTo`, `ApprovalHistory.Action`. `Coverage.Type`, `PolicyStatus`, `PolicyVersionStatus` remain ints. The **API** additionally serializes enums as their names in JSON responses (`JsonStringEnumConverter` in `Program.cs`).
 - **Global query filters**: NONE.
 - **JSON columns**: NONE (JSON is stored as plain strings, e.g. `AgentRun.OutputJson`, `Decision.Rationale`, `ApprovalItem.Summary`).
 - **Migrations** (in `src/ClaimPilot.Infrastructure/Migrations/`):
   1. `20260910202124_InitialCreate` — all tables, Identity schema, pgvector extension + HNSW index raw SQL, vector(768) column.
   2. `20260910210401_UniqueChunkHashPerVersion` — drops unique `IX_PolicyChunks_ContentHash`, adds unique `IX_PolicyChunks_PolicyVersionId_ContentHash`.
+  3. `20260913205511_ChangeAssignedToEnumAndAddAssignedAt` — `ApprovalItems.AssignedTo` string → `AssigneeRole?` (string-converted) + new `AssignedAt` column.
 - **Design-time factory**: `AppDbContextFactory` (hardcoded local connection string) so `dotnet ef` works without booting the API.
 - **Concurrency handling**: NONE — no row-version/timestamp columns; last-write-wins.
 - **Transactions**: NONE explicitly used. `SaveChanges` is called indiscriminately per operation; ingestion performs `AddRange` + single save.
 - **Seed data**: Two seeders, run at startup in `Program.cs` (Section 33).
 - **DB initialization**: `Program.cs` creates a scope → `db.Database.MigrateAsync()` → `SeedData.SeedAsync()` (roles+users) → `DemoDataSeeder.SeedAsync()` (policy corpus). Runs on every start; idempotent (returns early if `Policies.Any()`).
-- **Repository pattern oddity**: `IClaimRepository.GetByIdAsync` is `AsNoTracking()` *without* `Include(Runs/ApprovalItems)` — feeds the issues in Sections 39.
+- **Repository tracking split**: run-write paths use **tracked** queries (`CreateRunAsync` returns the tracked run; `GetRunAsync` `Include(AgentRuns/Anomalies)`; `GetDecisionForRunAsync` `Include(Run→Claim)`) — this fixed the detached-entity write errors in the draft/anomaly tools. `GetByIdAsync` is still `AsNoTracking()` but now **`Include(Runs→ApprovalItems/Anomalies/FinalDecision)` + `Include(Documents)`** — so `GET /api/claims/{id}/runs` is populated.
+- **Claim intake validation** (DTO data annotations): `CreateClaimRequest` — `PolicyNumber` `[Required, MaxLength(64)]`, `IncidentDate` `[Required]`, `ClaimAmount` `[Required, Range(0.01, 10000000)]`, `Description` `[Required, MinLength(20), MaxLength(4000)]`; `UploadDocumentRequest` — `DocumentType` `[Required]` (checked against `ClaimUploadRules.AllowedDocumentTypes`), `File` `[Required]` + `[RequestSizeLimit(20_000_000)]`, content-type/extension/magic bytes checked by `ClaimUploadRules`/`ContentTypeSniffer`.
+- **Claim-number generation**: `GenerateClaimNumberAsync` allocates the per-year sequence `CLAIM-{year}-{3-digit}` inside a serializable transaction with a `DbUpdateException` retry (used by POST `/api/claims`; Section 7/8).
 
 ---
 
@@ -314,16 +336,16 @@ Entry point is `POST /api/claims/{claimId}/adjudicate` (SSE). Full trace with ac
    - Emits output JSON `{ version_id, version, effective_date, coverage_items, citation }`.
    - **No LLM call.**
 1. **Agent 2 — Exclusion Analyst** → `ExclusionAnalystAgent.ExecuteAsync` (line 155)
-   - Calls `RetrievePolicyVersioned` again.
-   - **BUG**: `JsonSerializer.Deserialize<List<ExclusionCandidate>>(retrieveCall.OutputJson)` on a `PolicyMatchResult` object throws `JsonException` (verified — see Section 39). Agent fails; orchestrator retries `MaxRetries` (3) times then throws `DomainException` → outer catch → `EnableFallbackRag=true` → **run degrades**. It returns `RunResult` with Status="degraded", no ApprovalItem.
-1. *(Intended, blocked by the bug above)*: deterministically matched exclusions update `state.ApplicableExclusions = ParseExclusions(agent.Output)`.
-2. **Deterministic engine** → `DeterministicAdjudicationEngine.Compute(ComputationRequest{ClaimAmount, Deductible, CoinsuranceRate, CoverageLimit, ApplicableExclusions})` → `Computation` (Section 19). Trace+event `engine_completed`.
+   - Calls `RetrievePolicyVersioned` again; deserializes the response as `PolicyMatchResult` (object — correct type).
+   - Maps `match.Exclusions` → `ExclusionCandidate[]`, asks the LLM to **shortlist** plausibly relevant codes, then for each shortlisted code calls the `check_exclusion` tool which verifies **deterministically** (`IsApplicable` keyword rule) and returns `ExclusionCheckResult{IsApplicable, Evidence}`.
+   - Outputs `{ applicable_codes: [...], evidence: [...] }`; the orchestrator parses and sets `state.ApplicableExclusions` → fed to the engine later.
+1. **Deterministic engine** → `DeterministicAdjudicationEngine.Compute(ComputationRequest{ClaimAmount, Deductible, CoinsuranceRate, CoverageLimit, ApplicableExclusions})` → `Computation` (Section 19). Trace+event `engine_completed`.
 3. **Agent 3 — Anomaly Detector** → `AnomalyDetectorAgent.ExecuteAsync`: deterministic heuristics; writes each anomaly via `RecordAnomaly` tool; outputs JSON array; orchestrator parses via `ParseAnomalies`.
 4. **Agent 4 — Adjudication Drafter** → `AdjudicationDrafterAgent.ExecuteAsync`: reads `computation_*` from `ctx.State`, decides `decision` + `proposed_amount` deterministically from `Computation.Payable`, asks LLM only to write `rationale` prose, adds `citations`, `edits_open:[]`.
-5. **Human review gate**: orchestrator creates `ApprovalItem { ClaimId, RunId, Status=Pending, Priority=ComputePriority(...), SLADeadline=ComputeDeadline(...), Title="Decision required — {claim}", Summary=draft JSON }`, `_approvals.AddAsync`. Trace + event `review_required`. Run status → `Completed`.
+5. **Human review gate**: orchestrator creates `ApprovalItem { ClaimId, RunId, Status=Pending, Priority=ComputePriority(...), SLADeadline=ComputeDeadline(...), AssignedTo=AssignmentRouter.Compute(priority, proposedAmount, authority), AssignedAt=UtcNow, Title="Decision required — {claim}", Summary=draft JSON }`, `_approvals.AddAsync`. Trace + event `review_required`. Run status → `Completed`.
 6. **SSE**: emits `completed` event; controller emits `run_complete` with serialized `RunResult` (`ReviewRequired=true`, `ApprovalItemId`, `ProposedPayout`).
 7. **Human decision** → `ReviewController` → `ApprovalService.{Approve,Reject,Edit,ReReview,Assign,Escalate,OverridePriority}Async` (Section 22). States and history recorded.
-8. **Final decision** → **NOT IMPLEMENTED** (no `Decision(IsFinal=true)`/letter generation).
+8. **Final decision** → `POST /api/review/{approvalItemId}/approve` (gated by `RequireApprovalAuthority`: caller must hold the item's `AssignedTo` role and the amount must be ≤ the caller's role threshold) → `ApprovalService.ApproveAsync` → `FinalizeDecisionAsync`: loads the draft `Decision` (`GetDecisionForRunAsync`), sets `IsFinal=true` + `ApprovalItemId`, sets `run.FinalDecisionId`/`FinalDecision`, persists, builds letter text (`BuildLetterText`) and inserts a `DecisionLetter`, writes audit `AuditLog{Action="Finalised"}`. A **rejection** only marks the `ApprovalItem` `Rejected` (no letter/decision).
 
 ### Key record DTOs in the flow (all in Application interfaces)
 `AgentContext` → `ToolCallRequest`/`ToolParam` → `ToolCallRecord` → `PolicyMatchResult`, `CoverageLine`, `ExclusionCheckResult`, `DraftAdjudicationResult` → `AgentResult` → `ComputationRequest` → `Computation` → `ApprovalItem` → `RunResult`.
@@ -332,7 +354,7 @@ Entry point is `POST /api/claims/{claimId}/adjudicate` (SSE). Full trace with ac
 
 # 7. API Endpoints
 
-Authentication: JWT Bearer. Roles: `Adjuster`, `Supervisor`, `Viewer`. (* = requires role)
+Authentication: JWT Bearer. Roles: `Adjuster`, `Supervisor`, `Director`, `Viewer`. (* = requires role)
 
 ### Auth
 
@@ -347,49 +369,38 @@ Authentication: JWT Bearer. Roles: `Adjuster`, `Supervisor`, `Viewer`. (* = requ
 |---|---|---|---|---|---|---|
 | GET | `/api/claims` | Adjuster/Supervisor/Viewer | — | `List<ClaimDto>` | `IClaimRepository.GetAllAsync` (ordered by CreatedAt desc) | List claims |
 | GET | `/api/claims/{claimId:guid}` | same | — | `ClaimDto` | `GetByIdAsync` | Get one claim (404 via `DomainException`→400, not 404 — see note) |
-| GET | `/api/claims/{claimId:guid}/runs` | same | — | `List<RunDto>` | `GetByIdAsync` + navigation `claim.Runs` | List runs for a claim. **SUSPECTED BROKEN** — `Runs` never loaded (`NoTracking`, no `Include`) |
+| GET | `/api/claims/{claimId:guid}/runs` | same | — | `List<RunDto>` | `GetByIdAsync` + navigation `claim.Runs` | **FIXED** — `Runs`(→ApprovalItems/Anomalies/FinalDecision) + `Documents` are included so this populates; note `Runs` passes literal `null` for `RunDto.PolicyVersion` (see 39) |
 | GET | `/api/claims/runs/{runId:guid}/trace` | same | — | `TraceViewResponse` | `IRunTraceViewBuilder.BuildAsync` | Full observability view of a run |
+| POST | `/api/claims` | **Adjuster,Supervisor** | `CreateClaimRequest(PolicyNumber, IncidentDate, ClaimAmount, Description)` | 201 `ClaimDto` + Location → `GET .../claims/{id}` | `ClaimsController.Create` → `ValidateNewClaim` → `GetByPolicyNumberAsync` → `AddAsync` → audit "Created" | Claim intake; per-year sequential `ClaimNumber` (`GenerateClaimNumberAsync`, serializable tx) |
+| POST | `/api/claims/{claimId:guid}/documents` | **Adjuster,Supervisor** | multipart `UploadDocumentRequest(DocumentType, File)` `[RequestSizeLimit(20MB)]` | 201 `ClaimDocumentDto` + Location → `/api/claims/{id}/documents/{documentId}` | `UploadDocument` → `ClaimUploadRules.ValidateAndResolve` → `ContentTypeSniffer.Matches` → `IStorageService.SaveAsync` → `AddDocumentAsync` → audit "Uploaded" | Attach a claim document; stored on disk `uploads/{claimId:N}/{documentId:N}{ext}` |
 | POST | `/api/claims/{claimId:guid}/adjudicate?correlationId=` | **Adjuster,Supervisor** | — (SSE `text/event-stream`) | SSE events + final `run_complete` | `IClaimsOrchestrator.RunAsync` | Run the whole supervisor + agent pipeline live |
 
-### Review (`ReviewController`, class-level `[Authorize(Roles="Adjuster,Supervisor")]`)
+### Review (`ReviewController`, class-level `[Authorize(Roles="Adjuster,Supervisor,Director")]`; all action routes use `{approvalItemId:guid}`)
 
 | Method | Route | Auth | Request | Response | Service |
 |---|---|---|---|---|---|
-| GET | `/api/review?status=&assigneeId=&priority=` | Adjuster/Supervisor | `ReviewQueueFilterRequest` | `List<ApprovalItemView>` | `IApprovalQueueReader.GetQueueAsync` |
-| GET | `/api/review/{approvalItemId:guid}` | Adjuster/Supervisor | — | `ApprovalItemDetail` (404 if missing) | `IApprovalQueueReader.GetAsync` |
-| POST | `/api/review/{id}/approve` | Adjuster/Supervisor | `ReviewApproveBody(Comment?)` | `ReviewActionResult` | `IApprovalService.ApproveAsync` |
-| POST | `/api/review/{id}/reject` | Adjuster/Supervisor | `ReviewRejectBody(Comment)` | `ReviewActionResult` | `RejectAsync` |
-| POST | `/api/review/{id}/edit` | Adjuster/Supervisor | `ReviewEditBody(Comment, EditedDecisionJson, EditedAmount?)` | `ReviewActionResult` | `EditAsync` |
-| POST | `/api/review/{id}/re-review` | Adjuster/Supervisor | `ReviewReReviewBody(Comment?)` | `ReviewActionResult` | `ReReviewAsync` |
-| POST | `/api/review/{id}/assign` | **Supervisor only** | `ReviewAssignBody(AssigneeId, Comment?)` | `ReviewActionResult` | `AssignAsync` |
-| POST | `/api/review/{id}/escalate` | **Supervisor only** | `ReviewEscalateBody(Comment?)` | `ReviewActionResult` | `EscalateAsync` |
-| POST | `/api/review/{id}/priority` | **Supervisor only** | `ReviewPriorityBody(NewPriority, Comment?)` | `ReviewActionResult` | `OverridePriorityAsync` |
+| GET | `/api/review?status=&assigneeId=&priority=` | Adjuster/Supervisor/Director | `ReviewQueueFilterRequest` (`AssigneeId` is `AssigneeRole?`) | `List<ApprovalItemView>` | `IApprovalQueueReader.GetQueueAsync` |
+| GET | `/api/review/{approvalItemId:guid}` | Adjuster/Supervisor/Director | — | `ApprovalItemDetail` (404 if missing) | `IApprovalQueueReader.GetAsync` |
+| POST | `/api/review/{approvalItemId}/approve` | `[RequireApprovalAuthority(Approve)]` — caller must hold the item's **`AssignedTo`** role and amount ≤ role threshold | `ReviewApproveBody(Comment?)` | `ReviewActionResult` | `IApprovalService.ApproveAsync` — **also finalizes the decision + issues the letter** |
+| POST | `/api/review/{approvalItemId}/reject` | `[RequireApprovalAuthority(Reject)]` — caller must hold the item's **`AssignedTo`** role | `ReviewRejectBody(Comment)` | `ReviewActionResult` | `RejectAsync` |
+| POST | `/api/review/{approvalItemId}/edit` | `[RequireApprovalAuthority(Edit)]` — caller must hold the item's **`AssignedTo`** role and amount ≤ role threshold | `ReviewEditBody(Comment, EditedDecisionJson, EditedAmount?)` | `ReviewActionResult` | `EditAsync` |
+| POST | `/api/review/{approvalItemId}/re-review` | Adjuster/Supervisor/Director | `ReviewReReviewBody(Comment?)` | `ReviewActionResult` | `ReReviewAsync` |
+| POST | `/api/review/{approvalItemId}/assign` | **Supervisor,Director** | `ReviewAssignBody(Assignee: AssigneeRole, Comment?)` | `ReviewActionResult` | `AssignAsync` (sets `AssignedTo`+`AssignedAt`) |
+| POST | `/api/review/{approvalItemId}/escalate` | Adjuster/Supervisor/Director | `ReviewEscalateBody(Comment?)` | `ReviewActionResult` | `EscalateAsync` (routes by caller role: has Supervisor/Director → Director, else Supervisor; sets `Escalated`) |
+| POST | `/api/review/{approvalItemId}/priority` | **Supervisor,Director** | `ReviewPriorityBody(NewPriority, Comment?)` | `ReviewActionResult` | `OverridePriorityAsync` (also resets `SLADeadline` by new priority) |
 
-All Review handlers read `ReviewerId()` = `User.Identity?.Name ?? "anonymous"`.
+`RequireApprovalAuthorityAttribute` (API/Auth, `IAsyncAuthorizationFilter`): authenticates → collects role claims → parses `approvalItemId` route value (400 if missing/invalid) → loads item via `IApprovalQueueReader` (404) → for Approve/Reject/Edit requires `AssignedTo` set (else **409 "Item is unassigned"**) and the caller to hold that role (else **403**) → for Approve/Edit, `ProposedAmount` must be ≤ `AuthorityService.GetThresholdForUser` (else **403**). All Review handlers read `ReviewerId()` = `User.Identity?.Name ?? "anonymous"`; `ReviewerRoles()` feeds escalate routing.
 
-### Documents (`DocumentsController`, `[Authorize(Roles="Adjuster,Supervisor")]`)
+### Documents, Ask, Audit, Statistics
+
+`DocumentsController`/`AskController`: `[Authorize(Roles="Adjuster,Supervisor")]`. `AuditController`/`StatisticsController`: `[Authorize(Roles="Supervisor")]`.
 
 | Method | Route | Auth | Request | Response | Service | Purpose |
 |---|---|---|---|---|---|---|
 | POST | `/api/documents/ingest` | Adjuster/Supervisor | multipart form: `policyNumber`, `version`, `effectiveDate`, `file` (`[RequestSizeLimit(20_000_000)]`) | `IngestDocumentResponse(DocumentReference,Status,ChunksCreated,ChunksSkipped,Error,CorrelationId)` | `IDocumentIngestionService.IngestAsync` | Ingest policy wording (pdf/md/docx), embed + store chunks (idempotent) |
-
-### Ask (`AskController`, `[Authorize(Roles="Adjuster,Supervisor")]`)
-
-| Method | Route | Auth | Request | Response | Service |
-|---|---|---|---|---|---|
-| POST | `/api/ask` | Adjuster/Supervisor | `AskRequest(Question, PolicyNumber, IncidentDate?)` | `AskResponse(Answer, Refused, RefusalReason, Citations)` | `AskService.AskAsync` |
-
-### Audit (`AuditController`, `[Authorize(Roles="Supervisor")]`)
-
-| Method | Route | Auth | Request | Response | Service |
-|---|---|---|---|---|---|
-| GET | `/api/audit?entityType=&entityId=&runId=&take=100` | Supervisor only | — | `List<AuditDto>` | `IAuditService.QueryAsync` |
-
-### Statistics (`StatisticsController`, `[Authorize(Roles="Supervisor")]`)
-
-| Method | Route | Auth | Request | Response | Service |
-|---|---|---|---|---|---|
-| GET | `/api/statistics?from=&to=` | Supervisor only | — | `ReviewStatistics(TotalResolved, Approved, Rejected, Edited, AverageReviewHours, SlaHitRate, PerAdjuster)` | `IReviewStatisticsService.GetAsync` |
+| POST | `/api/ask` | Adjuster/Supervisor | `AskRequest(Question, PolicyNumber, IncidentDate?)` | `AskResponse(Answer, Refused, RefusalReason, Citations)` | `AskService.AskAsync` | Grounded Q&A with refusal |
+| GET | `/api/audit?entityType=&entityId=&runId=&take=100` | Supervisor only | — | `List<AuditDto>` | `IAuditService.QueryAsync` | Audit trail |
+| GET | `/api/statistics?from=&to=` | Supervisor only | — | `ReviewStatistics(TotalResolved, Approved, Rejected, Edited, AverageReviewHours, SlaHitRate, PerAdjuster)` | `IReviewStatisticsService.GetAsync` | Review metrics |
 
 ### Health
 `GET /health` — no auth, `AspNetCore.HealthChecks.NpgSql` + `AspNetCore.HealthChecks.Redis`.
@@ -417,7 +428,7 @@ public class Claim {
 ```
 Represents an insurance claim. `IncidentDate` is the anchor for policy-version selection. Used by orchestrator, engine, review queue.
 
-### `ClaimDocument` — file metadata row for a claim (never populated via API today).
+### `ClaimDocument` — file metadata row for a claim; populated via `POST /api/claims/{claimId}/documents` (metadata only — bytes live on disk under `Storage:UploadRoot`).
 
 ### `Policy` / `PolicyVersion` (`Policy.cs:5/18`)
 `Policy` groups versions; `PolicyVersion` carries `Version`, `EffectiveDate`, `SupersedesVersionId`, `Status`. `EffectiveDate` is the version-selection discriminator.
@@ -426,7 +437,7 @@ Represents an insurance claim. `IncidentDate` is the anchor for policy-version s
 
 ### `CoverageItem` / `Exclusion` (`Coverage.cs`) — structured, machine-readable coverage geometry. `CoverageType` = Limit/Deductible/Coinsurance/Benefit/Condition; `Amount`/`PercentageRate` feed the deterministic engine.
 
-### `AdjudicationRun` / `AgentRun` / `Anomaly` / `Decision` / `DecisionLetter` (`Adjudication.cs`) — one orchestration run per claim. `AgentRun` JSON Input/Output for audit. `Decision.IsFinal=false` always today. `FinalDecision` navigation exists but is never assigned.
+### `AdjudicationRun` / `AgentRun` / `Anomaly` / `Decision` / `DecisionLetter` (`Adjudication.cs`) — one orchestration run per claim. `AgentRun` JSON Input/Output for audit. Drafts `Decision.IsFinal=false`; supervisor approval sets `IsFinal=true` + links `ApprovalItemId` and `run.FinalDecision`, then issues a `DecisionLetter` (`ApprovalService.FinalizeDecisionAsync`).
 
 ### `ApprovalItem` / `ApprovalHistory` / `AuditLog` (`Approval.cs`) — the human review queue aggregate + append-only audit trail.
 
@@ -441,19 +452,20 @@ Represents an insurance claim. `IncidentDate` is the anchor for policy-version s
 
 # 9. Application Layer
 
-- **Interfaces** (contracts the Application relies on): repositories (`IPolicyRepository`, `IClaimRepository`, `IChunkRepository`, `IApprovalRepository`, `IAuditRepository`, `ITraceRepository`, `IUsageRepository`), `ILLMProvider`, `IEmbeddingProvider`, `IAdjudicationEngine`, `IRetrievalService`, `IClaimsOrchestrator`, `IAgent`, `IToolRegistry`, `IAssignmentService`, `ISlaPolicy`, `IPriorityCalculator`, `IAuditService`, `ITraceService`, `IRunTraceViewBuilder`, `IApprovalService`, `IApprovalQueueReader`, `IReviewStatisticsService`, `IDocumentIngestionService`, `IFileTextExtractor`, `IChunkingStrategy`, `IUsageTracker`.
+- **Interfaces** (contracts the Application relies on): repositories (`IPolicyRepository`, `IClaimRepository`, `IChunkRepository`, `IApprovalRepository`, `IAuditRepository`, `ITraceRepository`, `IUsageRepository`), `ILLMProvider`, `IEmbeddingProvider`, `IAdjudicationEngine`, `IRetrievalService`, `IClaimsOrchestrator`, `IAgent`, `IToolRegistry`, `IAssignmentService`, `ISlaPolicy`, `IPriorityCalculator`, `IAuditService`, `ITraceService`, `IRunTraceViewBuilder`, `IApprovalService`, `IApprovalQueueReader`, `IReviewStatisticsService`, `IDocumentIngestionService`, `IFileTextExtractor`, `IChunkingStrategy`, `IUsageTracker`, `IStorageService`, `IAuthorityService`.
 - **No CQRS**: there are no explicit Command/Query/Handler objects. Request flow is: Controller → concrete service or orchestrator → repository/tool/provider. "Handlers" = the agent classes implementing `IAgent`.
 - **Business rules encoded in Application**:
   - Priority heuristic in `SupervisorOrchestrator.ComputePriority` (claim amount / limit ratio; thresholds 50k/20k/5k; ratio 1.6/1.2).
   - Deadline in `ComputeDeadline` (Critical→4h, High→8h, else 24h).
   - `PriorityCalculator.Calculate` (score-based; registered but unused).
   - `ApprovalService` state machine (Section 22).
-  - `AssignmentService` strategies (PolicyBased/PriorityBased/RoundRobin).
+  - `AssignmentService` strategies (PolicyBased/PriorityBased/RoundRobin) — registered but **not invoked** anywhere in code; the live mechanism is `AssignmentRouter`.
+  - Approval authority thresholds (`AuthorityService`/`ApprovalAuthorityOptions`), consumed by `RequireApprovalAuthorityAttribute` and `AssignmentRouter`.
   - `DefaultSlaPolicy` escalation timing (SlaRuleSet).
   - `DeterministicAdjudicationEngine` payout math (Section 19).
   - `ReviewStatisticsService` metrics.
 - **Validators**: no FluentValidation; validation is manual (e.g. `RejectRequest.Comment` required via `[Required]` + service checks; `EditAsync` requires comment + JSON).
-- **DI** (`Application/DependencyInjection.cs`): registers `OrchestrationEventSink` (singleton), engine (singleton), priority calculator (singleton), `ISlaPolicy` (scoped factory), assignment/approval/statistics/`AskService` (scoped), the 4 agents + orchestrator (scoped).
+- **DI** (`Application/DependencyInjection.cs`): registers `OrchestrationEventSink` (singleton), engine (singleton), priority calculator (singleton), `ISlaPolicy` (scoped factory), assignment/approval/statistics/`AskService`/`IAuthorityService` (scoped), the 4 agents + orchestrator (scoped). `ApprovalAuthorityOptions` bound to the `ApprovalAuthority` section.
 
 ---
 
@@ -517,7 +529,7 @@ Pipeline: (1) find extractor by `Supports(contentType, fileName)`; (2) ensure `P
 
 # 12. Version-Aware Policy Retrieval (CORE)
 
-This requirement IS implemented in the storage/query path — with the caveat that the agent pipeline never reaches the point where it matters (Section 39).
+This requirement IS implemented in the storage/query path **and the agent pipeline now reaches it** (the former Exclusion-Analyst blocker is fixed).
 
 - **Policy ID**: `Game` → `Policy.Id` resolved from `PolicyNumber` (`IPolicyRepository.GetByPolicyNumberAsync`).
 - **Version / effective date / incident date selection**: `PolicyRepository.GetApplicableVersionAsync(policyId, incidentDate)`:
@@ -605,9 +617,9 @@ All agents implement `IAgent { AgentType, DisplayName, ExecuteAsync(AgentContext
 | Agent | Class | LLM used? | Tools allowed (`AgentToolMap`) | Input (AgentContext) | Output (AgentResult) | When it runs |
 |---|---|---|---|---|---|---|
 | Coverage Matcher | `CoverageMatcherAgent` | **No** (ILLMProvider injected but never used) | `RetrievePolicyVersioned`, `ListCoverageItems` | claim/policy/incident/amount/description | JSON `{version_id,version,effective_date,coverage_items,citation}` | 1st (deterministic pin + coverage) |
-| Exclusion Analyst | `ExclusionAnalystAgent` | Yes — only to shortlist plausibly-relevant exclusions | `RetrievePolicyVersioned`, `CheckExclusion` | same | JSON `{applicable_codes:[...], evidence:[...]}` | 2nd — **currently always fails (bug)** |
+| Exclusion Analyst | `ExclusionAnalystAgent` | Yes — LLM **shortlists** plausibly-relevant exclusions | `RetrievePolicyVersioned`, `CheckExclusion` | same | JSON `{applicable_codes:[...], evidence:[...]}` | 2nd — **fixed; runs normally when `PolicyMatchResult` semantics match** |
 | Anomaly Detector | `AnomalyDetectorAgent` | **No** (deterministic heuristics) | `RecordAnomaly` | same + `State` (`policy_limit`, `has_documents`, computation) | JSON array of `AnomalyDto` | 3rd (after computation) |
-| Adjudication Drafter | `AdjudicationDrafterAgent` | Yes — rationale prose only | (none declared; `DraftAdjudication` is in its map but never invoked by the agent itself) | same + computation snapshot in `State` | JSON `{decision,proposed_amount,rationale,citations,edits_open:[]}` | 4th (last) |
+| Adjudication Drafter | `AdjudicationDrafterAgent` | Yes — rationale prose only | `DraftAdjudication` (agent invokes it; persists draft `Decision`) | same + computation snapshot in `State` | JSON `{decision,proposed_amount,rationale,citations,edits_open:[]}` | 4th (last) |
 
 **What each agent must NOT do** (per system prompts/design): never calculate payout amounts (engine only), never obey document text as instructions, never produce a final decision (draft only).
 
@@ -625,8 +637,9 @@ Actual contract types (Application layer):
 - `AgentResult { Output, RecommendsReview, Citations, ToolCalls: ToolCallRecord[], Success, Error }`
 - `ToolCallRecord { Id, Tool, InputJson, OutputJson, Succeeded, StartedAt, EndedAt?, Error? }`
 - `ToolDefinition { Name, Description, IsWrite, IsGatedWrite, RequiresAudit, ParameterSchema }`
-- `PolicyMatchResult { PolicyId, VersionId, Version, EffectiveDate, CoverageItems: CoverageLine[] }`
+- `PolicyMatchResult { PolicyId, VersionId, Version, EffectiveDate, CoverageItems: CoverageLine[], Exclusions: PolicyExclusionLine[]? }` — `Exclusions` added; this is what `ExclusionAnalystAgent` deserializes now
 - `CoverageLine { Code, Name, Limit?, Deductible?, Coinsurance?, Description }`
+- `PolicyExclusionLine { Code, Name, Description }`
 - `ExclusionCheckResult { IsApplicable, Code?, Name?, Evidence? }`
 - `DraftResult { DecisionType, ProposedAmount?, Rationale, CitationsJson?, Citations }` (defined but **not used** in code paths)
 - `DraftAdjudicationResult { Written, PendingApprovalItemId?, Error? }`
@@ -637,7 +650,7 @@ Actual contract types (Application layer):
 Contract-to-component flow (conceptual, including the intended-but-blocked path):
 ```text
 AgentContext ──► CoverageMatcher ──► PolicyMatchResult + CoverageLine[]
-              ──► ExclusionAnalyst ──► applicable_codes[]  (BROKEN today)
+              ──► ExclusionAnalyst ──► LLM shortlist + check_exclusion ⇒ applicable_codes[]
               ──► ComputationRequest ──► DeterministicEngine ──► Computation
               ──► AnomalyDetector ──► AnomalyDto[]
               ──► Drafter(State snapshot) ──► draft JSON {decision, proposed_amount,
@@ -658,12 +671,12 @@ Central executor: `ToolRegistryService : IToolRegistry` (`src/ClaimPilot.Infrast
 | `RetrievePolicyVersioned` | `RetrievePolicyVersionedAsync` | `policy_number`, `incident_date` | JSON `PolicyMatchResult` (coverage lines expanded) | read | no | no-tool-level (traced) |
 | `ListCoverageItems` | `ListCoverageItemsAsync` | `version_id` | JSON `CoverageLine[]` | read | no | no |
 | `CheckExclusion` | `CheckExclusionAsync` | `policy_number`, `version`, `exclusion_code`, `claim_description` | JSON `ExclusionCheckResult` | read | no | no |
-| `DraftAdjudication` | `DraftAdjudicationAsync` | `run_id`, `decision_json` | JSON `DraftAdjudicationResult(Written, "Draft decision saved but NOT final...")` | **write** | **yes (IsGatedWrite)** | yes (`AuditLog` "DraftCreated") |
+| `DraftAdjudication` | `DraftAdjudicationAsync` | `decision_json` (run id comes from `ExecuteAsync` call, not params) | JSON `DraftAdjudicationResult(Written, "Draft decision saved but NOT final. Awaiting human approval. draft_id=…")` | **write** | **yes (IsGatedWrite)** | yes (`AuditLog` "DraftCreated") |
 | `RecordAnomaly` | `RecordAnomalyAsync` | `type`, `severity`, `description`, `evidence` | JSON `{recorded, anomaly_id}` | **write** | no | **yes (RequiresAudit=true)** — although no explicit audit row is written by the tool itself (only trace) |
 
 Mapping to the requested conceptual names: `retrieve_policy_versioned` = `RetrievePolicyVersioned`; `list_coverage_items` = `ListCoverageItems`; `check_exclusion` = `CheckExclusion` (deterministic keyword matching, ≥2 keywords hit); `draft_adjudication` = `DraftAdjudication`; `record_anomaly` = `RecordAnomaly`.
 
-**Gating semantics**: `DraftAdjudication` persists a `Decision{IsFinal=false}` and returns a message/approval item id. Nothing turns it final automatically — the human must approve the corresponding `ApprovalItem`. `ToolRegistryService` does not itself read `IsGatedWrite` to block (the orchestrator flow guarantees draft-only); the gate is enforced by the workflow contract + `GatedWriteException` existing but never thrown.
+**Gating semantics**: `DraftAdjudication` persists a `Decision{IsFinal=false}` (via `SaveDraftAsync` + `AttachIfDetached`) and returns a message with the `draft_id`. Nothing turns it final automatically — the human must approve the corresponding `ApprovalItem` (`ApprovalService.FinalizeDecisionAsync`). `ToolRegistryService` does not itself read `IsGatedWrite` to block (the orchestrator flow guarantees draft-only); the gate is enforced by the workflow contract + `GatedWriteException` existing but never thrown.
 
 **CheckExclusion determinism**: `IsApplicable(exclusion, description)` tokenizes the exclusion text (words >4 chars) and applies if ≥2 appear in the claim description.
 **Authorization**: tools are system-internal (called by DI, not HTTP) — no per-user authorization; the HTTP surface enforces roles.
@@ -685,7 +698,7 @@ RunAsync(claimId, correlationId, ct):
   state = { coverage = policies.GetCoverageItems(version), exclusions = policies.GetExclusions(version) }
   coverageResult = retryAgent(coverageMatcher)        # attempt 0..MaxRetries, backoff 500*2^n
   state.MergeClaimsState(ctx)                          # no-op
-  exclusionResult = retryAgent(exclusionAnalyst)      # STILL: throws almost immediately -> degrade
+  exclusionResult = retryAgent(exclusionAnalyst)      # FIXED: LLM shortlist + check_exclusion verify
   computation = engine.Compute({claimAmount, deductible, coinsurance, limit, applicable exclusions})
   anomalyResult = retryAgent(anomalyDetector)         # writes anomalies via RecordAnomaly
   draftResult   = retryAgent(adjudicationDrafter)
@@ -703,7 +716,7 @@ Controls:
 - **Stopping conditions**: after all 4 agents run (iteration counter passed but loop is linear; `MaxIterations` not a termination bound).
 - **Retries**: per-agent, up to `MaxRetries`+1 attempts with exponential backoff `Base * (1 << attempt)`; non-cancel exceptions retried; final failure → `DomainException`.
 - **Timeout/cancellation**: outer CTS with `Timeout`; linked to request token.
-- **Error handling/fallback**: as shown above; `EnableFallbackRag` returns a **degraded** `RunResult` — note it does **not actually run RAG** nor create an approval item, despite the summary text.
+- **Error handling/fallback**: as shown above; `EnableFallbackRag` returns a **degraded** `RunResult` — reached only on genuine agent failures now (previously the Exclusion-Analyst bug made this the normal path). Note it does **not actually run RAG** nor create an approval item, despite the summary text.
 - **State management**: `RequestState` class → `BuildAgentState` string dictionary → `ctx.State` for the Drafter; no cross-agent typed state.
 - **Events**: `OrchestrationEventSink` (singleton) raised by agents + orchestrator; forwarded to `EventRaised` subscribers; the API wires it to the SSE channel.
 - **Observability**: many `_trace.WriteAsync` calls + audit (ApprovalItem creation trace) + usage events.
@@ -760,10 +773,13 @@ There is **no** "recent policy change / duplicate claim" rule in code (duplicate
 
 # 21. Human Review Queue
 
-- **Entity**: `ApprovalItem` (Status ∈ `Pending/Approved/Rejected/Edited/Escalated`, Priority ∈ `Low/Normal/High/Critical`, `SLADeadline`, `AssignedTo`, `Summary` = draft JSON), `ApprovalHistory` (append-only rows).
-- **Assignment**: `IAssignmentService` (`AssignmentService`) with strategies PolicyBased/PriorityBased/RoundRobin (`KnownAdjusters = {"adjuster","supervisor"}`), but assignment is **not invoked** by the orchestrator or the approve flow — SLA worker calls `AssignAsync` internally via `ApprovalService.Assign`, and the HTTP `/assign` endpoint exists. Straight-through orchestration creates items **unassigned**.
+- **Entity**: `ApprovalItem` (Status ∈ `Pending/Approved/Rejected/Edited/Escalated`, Priority ∈ `Low/Normal/High/Critical`, `SLADeadline`, `AssignedTo` `AssigneeRole?`, `AssignedAt`, `Summary` = draft JSON), `ApprovalHistory` (append-only rows).
+- **Assignment (at creation)**: `SupervisorOrchestrator` sets `AssignedTo = AssignmentRouter.Compute(priority, proposedAmount, authority)` + `AssignedAt = UtcNow` when creating the item. `AssignmentRouter`: tier from priority (Critical→3, High→2, else 1), bumped by amount (amount > Supervisor threshold → 3; > Adjuster threshold → 2); tier 3→Director, 2→Supervisor, else Adjuster. Items are therefore **never created unassigned**.
+- **Manual assign**: `ApprovalService.AssignAsync` (`AssigneeRole` from `ReviewAssignBody`), HTTP `/assign` restricted to Supervisor+Director; sets `AssignedTo` + `AssignedAt`, history action `Assigned`.
+- **Legacy strategy service**: `IAssignmentService`/`AssignmentService` (PolicyBased/PriorityBased/RoundRobin, `KnownAdjusters={adjuster,supervisor}`) still exists and is registered, but **nothing calls it** (dead wiring, see 39).
 - **Priority / SLA**: orchestrator computes priority + deadline from its own heuristic when creating the item. `ReviewQueueReader` flags `IsLate = SLADeadline < now && Status==Pending`.
-- **Escalation**: `SlaEscalationWorker` (BackgroundService) every 2 min; Redis lock `claimpilot:sla:sweep` (1 min TTL) to avoid duplicate sweeps; evaluates `DefaultSlaPolicy.EvaluateEscalation` against `SlaRuleSet` (UnassignedAfter 2h→"pool", UnreviewedAfter 8h→"supervisor", LateAfter 16h→"director"); actions call `AssignAsync(assignee="pool"/"supervisor")` or `EscalateAsync(→ AssignedTo="director")`.
+- **Escalation (SLA worker)**: `SlaEscalationWorker` (BackgroundService) every 2 min; Redis lock `claimpilot:sla:sweep` (1 min TTL); per Pending item, using `elapsed = now − (AssignedAt ?? CreatedAt)`: `AssignedTo == Adjuster` > 8h → Supervisor; `Supervisor` > 16h → Director; **unassigned** > 2h → routed by priority (Critical→Director, High→Supervisor, else Adjuster). All via `IApprovalService.AssignAsync(AssigneeRole, "sla-worker", ...)`, which updates `AssignedTo`+`AssignedAt` + history. (`DefaultSlaPolicy`/`SlaRuleSet`/`ISlaPolicy` remain but the worker does **not** use them.)
+- **Escalate endpoint**: `EscalateAsync` requires `Pending`, sets status `Escalated` + `AssignedTo` = Director if caller holds Supervisor/Director else Supervisor, resets `AssignedAt`. An `Escalated` item returns to work only via `ReReviewAsync` (any of the three roles) because the other actions require `Pending`.
 - **Status transitions** enforced by `ApprovalService` (see Section 22).
 
 ```mermaid
@@ -773,7 +789,7 @@ stateDiagram-v2
     Pending --> Rejected: Reject (needs Pending + comment)
     Pending --> Edited: Edit (needs Pending + comment + json)
     Edited --> Pending: ReReview
-    Pending --> Escalated: Escalate (AssignedTo=director)
+    Pending --> Escalated: Escalate (routes by caller role to Director/Supervisor)
     Pending --> Pending: Assign / ReReview / PriorityOverride
     Approved --> [*]
     Rejected --> [*]
@@ -784,17 +800,17 @@ Note: the `EditAsync` return value reports `ApprovalStatus.Pending` while the en
 
 # 22. Approval Flow
 
-All through `/api/review/{id}/…` → `ApprovalService` → `ApprovalRepository` + `IAuditService`.
+All through `/api/review/{approvalItemId}/…` → `ApprovalService` → `ApprovalRepository` + `IAuditService`. Endpoint-level authorization: **approve/reject/edit** = `RequireApprovalAuthority` (caller holds the item's `AssignedTo` role; approve/edit also `amount ≤ threshold`); **assign/priority** = Supervisor+Director; **re-review/escalate** = Adjuster+Supervisor+Director (Section 23). The service layer itself does not re-check roles/thresholds — that is enforced by the HTTP filter.
 
 ### Approve (`ApproveAsync` / `POST .../approve`)
 - Requires current status `Pending` (`RequireState`), else `InvalidStateTransitionException` (400).
 - Sets `Status=Approved`, `ReviewedAt=UtcNow`; appends `ApprovalHistory{Action=Approved, ReviewerId, Comment, Previous/NewState (serialized {Status,AssignedTo,Priority,Summary})}`; writes `AuditLog{Action=Approved, Before/After}`.
-- **No `Decision(IsFinal=true)` is created; no letter is issued; `AdjudicationRun.FinalDecision` untouched.** `ReviewActionResult` returns `(id, Approved, RunId?)`.
+- Then `FinalizeDecisionAsync`: loads the run's draft `Decision` (`ClaimRepository.GetDecisionForRunAsync`), sets `IsFinal=true` + `ApprovalItemId`, sets `run.FinalDecisionId`/`run.FinalDecision`, calls `_db.SaveChangesAsync`; builds the letter text (`BuildLetterText` — mandated sections + tabs, redacted PII removed) and inserts a `DecisionLetter` (`ClaimRepository.AddLetterAsync`); writes `AuditLog{Action="Finalised", ...}`. `ReviewActionResult` returns `(id, Approved, RunId?)`.
 
 ### Reject (`RejectAsync` / `POST .../reject`)
 - Comment required (service validation + `[Required]`).
 - Requires `Pending`. Sets `Rejected`, `ReviewedAt`; history + audit (`Rejected`).
-- Same "no final decision/letter" gap.
+- **Rejection creates no letter and no final decision** — the draft `Decision` stays `IsFinal=false`. Design gap documented in Section 39.
 
 ### Edit (`EditAsync` / `POST .../edit`)
 - Comment + `EditedDecisionJson` required; requires `Pending`.
@@ -802,7 +818,14 @@ All through `/api/review/{id}/…` → `ApprovalService` → `ApprovalRepository
 - **Returned** `ReviewActionResult.NewStatus = Pending` (mismatch with entity status `Edited` — documented in Section 39).
 - Re-review via `ReReviewAsync` sets status back to `Pending`.
 
-The decision letter (`DecisionLetter`) and final `Decision(IsFinal=true)` are **not implemented**; Section 6's "Final Decision" step has no code path.
+### Assign / Priority override (Supervisor,Director)
+- `AssignAsync`: sets `AssignedTo = AssigneeRole` + `AssignedAt = UtcNow`; history action `Assigned`; stays in Pending.
+- `OverridePriorityAsync`: sets `Priority` and recomputes `SLADeadline` (Critical→4h, High→8h, else 24h); history action `PriorityOverride`.
+
+### Escalate (Adjuster,Supervisor,Director)
+- `EscalateAsync` (requires Pending): status → `Escalated`; `AssignedTo` = Director if caller holds Supervisor/Director, else Supervisor; resets `AssignedAt`; history action `Escalated`. An escalated item needs `ReReviewAsync` to return to `Pending` (approve/reject/edit require Pending).
+
+The final `Decision(IsFinal=true)` + `DecisionLetter` are implemented only on the **approve** path (see above); a later re-review/edit does not re-issue or supersede a letter.
 
 ---
 
@@ -812,21 +835,23 @@ The decision letter (`DecisionLetter`) and final `Decision(IsFinal=true)` are **
 - **Issuer/Audience/Key**: `Jwt:Issuer` (`claimpilot`), `Jwt:Audience` (`claimpilot-api`), `Jwt:Key` (`<REDACTED>`; dev default in code), `ExpiresHours` 8.
 - **Validation**: issuer, audience, signing key, lifetime, `ClockSkew=1min`.
 - **Claims**: `sub` (user id), `unique_name`, `jti`, `iat`, one `role` claim per role.
-- **Roles implemented**: `Adjuster`, `Supervisor`, `Viewer` (seeded users: `adjuster`, `supervisor` (has both Supervisor+Adjuster), `viewer`). Passwords are dev-only (`*#2026-local-only`), documented as non-production.
-- **Policies**: none custom; `AddAuthorization()` default. Attribute-based only.
-- **Robes on endpoints**:
+- **Roles implemented**: `Adjuster`, `Supervisor`, `Director`, `Viewer` (seeded users: `adjuster` (Adjuster), `supervisor` (Supervisor+Adjuster), `director` (Director+Supervisor+Adjuster), `viewer` (Viewer)). Passwords are dev-only per-user (`{Role}#2026-local-only`), documented as non-production.
+- **Policies**: none custom; `AddAuthorization()` default. Attribute-based only, plus the custom `RequireApprovalAuthorityAttribute : IAsyncAuthorizationFilter` for review decision actions.
+- **Roles on endpoints** (current on `main @ f8f177e`):
   - `Adjuster/Supervisor/Viewer`: GET claims list/get/runs/trace.
-  - `Adjuster/Supervisor`: POST adjudicate, all review queue ops (assign/escalate/priority require Supervisor additionally), documents ingest, ask.
-  - `Supervisor`: audit query, statistics query, review assign/escalate/priority.
+  - `Adjuster/Supervisor`: POST `/api/claims` (create), POST `/api/claims/{id}/documents` (upload), POST adjudicate, documents ingest, ask.
+  - `Adjuster/Supervisor/Director`: GET review queue/detail, re-review, escalate.
+  - **`Supervisor,Director`**: assign, priority override. Audit query + statistics stay **Supervisor**-only.
+  - **approve / reject / edit**: no fixed role — `RequireApprovalAuthority`: caller must hold the item's `AssignedTo` role (Approve/Edit additionally `ProposedAmount ≤ GetThresholdForUser`; unassigned item → 409).
   - `Anonymous`: `POST /api/auth/login`, `GET /health`.
-- **Server-side authorization**: `[Authorize(Roles=…)]` on controller/action. `ReviewerId()` reads `User.Identity.Name` (unique_name) — no object-level ownership checks (users can act on any queue item they can see).
+- **Server-side authorization**: `[Authorize(Roles=…)]` on controller/action; `RequireApprovalAuthorityAttribute` performs the object-level check (assignee role + amount threshold). `ReviewerId()` reads `User.Identity.Name` (unique_name); `ReviewerRoles()` returns the caller's role claims for escalate routing.
 
 ---
 
 # 24. Realtime / SSE
 
 - **Endpoint**: `POST /api/claims/{claimId}/adjudicate` returns `text/event-stream` (`Cache-Control: no-cache`, `Connection: keep-alive`).
-- **Mechanism**: `Channel<string>` (unbounded); the orchestrator's `EventRaised` subscriber enqueues an SSE frame `event: event` + `data: {event_type, run_id, agent, tool, payload}`; controller drains the channel writing+fFlushing each frame, awaits `orchestrator.RunAsync` inside `Task.Run`, then emits a terminal `event: run_complete` frame with the serialized `RunResult`.
+- **Mechanism**: `Channel<string>` (unbounded); the orchestrator's `EventRaised` subscriber enqueues an SSE frame `event: event` + `data: {event_type, run_id, agent, tool, payload}`; the controller starts a **drain task** (`channel.Reader.ReadAllAsync`) so frames flow even while the request handler awaits `orchestrator.RunAsync` inside `Task.Run`, then after the run finishes the drain completes the writer (`TryComplete`) and the handler emits a terminal `event: run_complete` frame with the serialized `RunResult`. (This two-task design fixed the earlier hang where `run_complete` only arrived after the client-closing logic had already torn down the writer.)
 - **Events emitted** (from orchestrator + agents): `workflow_started`, `policy_version_selected`, `agent_started`, `agent_completed`, `engine_completed`, `review_required`, `completed`, `error`, `cancelled`, `run_complete`(controller terminal). Payloads are JSON strings.
 - **Token streaming**: the LLM `StreamCompleteAsync` exists but is **not wired** into this endpoint — SSE carries orchestrator progress events only, not generated tokens.
 - **Cancellation**: the controller's `CancellationToken ct` propagates; on client disconnect the orchestrator marks the run `Cancelled` (and rethrows).
@@ -845,7 +870,7 @@ The decision letter (`DecisionLetter`) and final `Decision(IsFinal=true)` are **
 - **Token usage/cost**: `UsageRecords` rows (scope=llm/embedding/retrieval/ask, provider/model, input/output tokens, `EstimatedCostUsd=0` for Ollama); `RunTraceViewBuilder` assembles per-run usage + `EstimatedCost`.
 - **Errors**: `Run.FailReason`, `AgentRun.Error`, global exception handler logs (severity-based).
 - **Audit logs**: `AuditLogs` (append-only) for approval actions + DraftCreated (tools).
-- **Inspection entry point**: `GET /api/claims/runs/{runId}/trace` → `IRunTraceViewBuilder.BuildAsync` returns `RunTraceView` (agents, tool calls, retrieval, computation steps, anomalies, usage, cost, approval history, final result). Note `FinalResult` is always null because `run.FinalDecision` is never populated.
+- **Inspection entry point**: `GET /api/claims/runs/{runId}/trace` → `IRunTraceViewBuilder.BuildAsync` returns `RunTraceView` (agents, tool calls, retrieval, computation steps, anomalies, usage, cost, approval history, final result). `FinalResult` is only populated **after a supervisor approves** (the draft decision is linked to the run's `FinalDecision` at that point); before that it is null.
 
 ---
 
@@ -857,7 +882,8 @@ Implemented:
 - **Groundedness for Ask**: `ContainsUnsupportedNumbers` refuses answers containing numbers not present in the retrieved corpus; LLM failure ⇒ safe refusal string.
 - **Tool allow-list**: `AgentToolMap` + `ToolRegistryService` rejects tools outside an agent's allow-list.
 - **Human approval gate**: orchestration only ever creates `Pending` approval items + draft `Decision(IsFinal=false)`; nothing auto-finalizes.
-- **Upload validation**: content-type/file-extension checks in extractors, 20 MB `RequestSizeLimit`, streaming.
+- **Approval authority + assignee gate**: approve/reject/edit are limited to the item's `AssignedTo` role (403 otherwise; 409 if unassigned), and approve/edit require `ProposedAmount ≤` the caller's role threshold (`RequireApprovalAuthorityAttribute`).
+- **Upload validation**: content-type/file-extension allow-lists + magic-byte sniffing (`ClaimUploadRules`/`ContentTypeSniffer`), 20 MB limit, streams to disk with a generated name (client name never used).
 - **ProblemDetails error responses** without stack traces/internal leak.
 - **Health checks**, dev-only Swagger (Development), `.gitignore` covering `appsettings.Local.json`, `.env`, `secrets.json`.
 
@@ -866,9 +892,9 @@ Missing / weak:
 - **No rate limiting.**
 - **No secret management**: default signing key in code + connection string w/ password in `appsettings.json` (dev); check `Jwt:Key` override is documented but dev fallback present.
 - **No input sanitization** of agent/user text beyond prompt guardrails and the number-grounding check; no output filtering of crafted answer content.
-- **Authz granularity**: any Adjuster can act on any approval item; only roles gate, no ownership/scope checks.
+- **Authz granularity**: approve/reject/edit are object-level (assigned role + threshold), but **assignee is a role, not an individual** — any user holding the item's role can act (no per-user ownership); assign/escalate/re-review remain open beyond the assigned role; the `RequireApprovalAuthority` filter runs the whole check (incl. DB read) per request.
 - **Loose env exposure**: `ProviderName`/logs; no PII-specific redaction logic; `UsageEventForwarder` logs errors but content isn't deliberately scrubbed.
-- **Decision letters** (sensitive final text) not generated at all.
+- **Decision letters** (sensitive final text) are generated only on **approval**; a rejected claim has no letter and its draft decision stays `IsFinal=false` — an availability/legal gap for the reject path.
 - Retrieval keyword path is susceptible to prompt-ish tokens being treated as data (mitigated only by prompts/number check).
 
 ---
@@ -876,7 +902,7 @@ Missing / weak:
 # 27. Error Handling
 
 - **Global** (`GlobalExceptionHandler : IExceptionHandler`): maps `PolicyVersionNotFoundException→404 policy_version_not_found`, `InsufficientInformationException→422`, `GatedWriteException→403`, `ValidationException→400`, other `DomainException→400 domain_error`, anything else→500 `internal_error` (generic message). Logs warnings <500, errors ≥500. `AddProblemDetails()` registered.
-- **LLM failures**: Ask → logs warning + refuses ("LLM unavailable; safe refusal."). Orchestrator agents → retried (`MaxRetries`); exclusion agent failure → degrade path. No exponential backoff jitter.
+- **LLM failures**: Ask → logs warning + refuses ("LLM unavailable; safe refusal."). Orchestrator agents → retried (`MaxRetries`); genuine agent failure (incl. exclusion agent) → degrade path. No exponential backoff jitter.
 - **Embedding failures**: dense retrieval falls back to keyword-only. Seeder uses deterministic vectors if Ollama down.
 - **Retrieval failures**: `PolicyVersionNotFound` thrown when applicable version missing/unknown policy.
 - **Timeout**: orchestrator `CreateLinkedTokenSource` + `CancelAfter(Timeout)`; timeout → `RunStatus.Failed` with `FailReason="Timeout"`.
@@ -905,8 +931,12 @@ Missing / weak:
 | `Redis:Timeout` | `00:00:00.5` | connect timeout |
 | `Orchestrator:Timeout` | `00:05:00` | run timeout |
 | `Orchestrator:MaxIterations` | `3` | agent context (unused as loop bound) |
-| `Assignment:*` | array of adjusters/supervisors, minutes | `AssignmentOptions` (partially used; `Strategy` not in appsettings) |
-| `Sla:*` | minutes thresholds | `SlaRuleSet` (evaluated as TimeSpans via defaults; note appsettings uses Minutes but `SlaRuleSet` default uses Hours — appsettings threshold names don't map to `SlaRuleSet.UnassignedAfter` etc., so effectively defaults are used) |
+| `Assignment:*` | `PoolAdjusters`, `WorkerSlaMinutes`, `EscalationPoolSupervisors` | `AssignmentOptions` — **do not bind** to `AssignmentStrategy`/`PolicyAssignments` members; strategy defaults to RoundRobin and the strategy service is unused anyway |
+| `Sla:*` | minutes thresholds | `SlaRuleSet` — **not used by `SlaEscalationWorker`**, which hardcodes the 8h/16h/2h rules (Section 21) |
+| `ApprovalAuthority:Adjuster` / `:Supervisor` / `:Director` | `10000` / `100000` / `1000000000` | `ApprovalAuthorityOptions` → `AuthorityService` thresholds + `AssignmentRouter` |
+| `Storage:UploadRoot` | `uploads` (relative to working dir) | `StorageOptions` → `FileStorageService` (claim document bytes) |
+
+**Environment shortcuts for the Docker stack** — `.env` / `.env.example` (interpolated by `docker-compose.yml`): `POSTGRES_DB=claimpilot`, `POSTGRES_USER=claimpilot`, `POSTGRES_PASSWORD=claimpilot`, `POSTGRES_PORT=5433`, `REDIS_PORT=6380`, `OLLAMA_PORT=11435`, `API_PORT=8080`, `JWT_KEY=ClaimPilotDevSigningKeyChangeMe_0123456789ABCDEF`, `ASPNETCORE_ENVIRONMENT=Development`. Ports are remapped to avoid clashing with a host's `5432/6379/11434/8080`. The compose `api` service overrides `ConnectionStrings:DefaultConnection`, `Redis:ConnectionString`, `Ollama:BaseUrl`, `Jwt:Key`, and `Jwt:Audience/Issuer` via environment variables, so the `appsettings.json` dev defaults (Section 28 table) are only used when running outside Docker.
 
 Defaults in code apply when config missing (`OllamaOptions`, `RedisOptions`, `OrchestratorOptions`, `SlaRuleSet`, `Jwt` dev key, DB connection fallback). Builds with environment override supported via config system.
 
@@ -914,34 +944,68 @@ Defaults in code apply when config missing (`OllamaOptions`, `RedisOptions`, `Or
 
 # 29. Docker / Deployment
 
-**NOT IMPLEMENTED.** There is no `Dockerfile`, no `docker-compose*`, no Kubernetes/Helm manifests, no CI/CD config, no `global.json`, no README scripts. The project runs like a standard ASP.NET Core app:
+**IMPLEMENTED (v1.0.0).** Containerized stack + CI. No Kubernetes/Helm.
 
-Prereqs: .NET 10 SDK; PostgreSQL 16+ with `pgvector` extension installed; Ollama running on `localhost:11434` with `llama3.2` and `nomic-embed-text` pulled; Redis optional (`localhost:6379`, tolerant).
+`Dockerfile` — multi-stage: `sdk:10.0` build (restore→build Release→publish) then `aspnet:10.0` runtime; exposes `8080`, runs `ENTRYPOINT ["dotnet", "ClaimPilot.API.dll"]` (the API auto-migrates + seeds on startup).
 
-Run:
+`docker-compose.yml` — services:
+| Service | Image | Notes |
+|---|---|---|
+| `db` | `pgvector/pgvector:pg16` | initdb script `docker/initdb/001-vector.sql` (`CREATE EXTENSION IF NOT EXISTS vector;` + grants); volume `postgres_data`; healthcheck `pg_isready`; host port `${POSTGRES_PORT:-5433}` |
+| `redis` | `redis:7-alpine` | healthcheck `redis-cli ping`; host port `${REDIS_PORT:-6380}` |
+| `ollama` | `ollama/ollama:latest` | **auto-pulls `llama3.2` + `nomic-embed-text` on boot** (entrypoint script); host port `${OLLAMA_PORT:-11435}` |
+| `api` | `insurance-claims-copilot-api:latest` (built from `Dockerfile`) | `depends_on` db/redis/ollama with `condition: service_healthy`; env overrides for DB connection, Redis, `Ollama:BaseUrl`, `Jwt:Key`, audience/issuer; port `${API_PORT:-8080}:8080` |
+
+Setup/teardown:
 ```bash
-# from repo root
+cp .env.example .env            # defaults: ports 5433/6380/11435/8080, db creds, JWT_KEY
+docker compose up --build -d    # pulls llama3.2 + nomic-embed-text on first boot
+docker compose logs -f api
+docker compose down             # (VOLUMES: docker compose down -v to wipe postgres_data)
+```
+
+**Local run** (no Docker): prereqs .NET 10 SDK, PostgreSQL 16+ w/ pgvector, Ollama on `localhost:11434` w/ `llama3.2` + `nomic-embed-text` pulled, Redis optional (`localhost:6379`, tolerant).
+```bash
 dotnet restore ClaimPilot.slnx
 dotnet ef database update --project src/ClaimPilot.Infrastructure   # or rely on Program.cs auto-migrate
 dotnet run --project src/ClaimPilot.API
 ```
-Startup auto-migrates + seeds. Health: `GET /health`. Swagger (dev): `/swagger`. App listens on `http://localhost:5028` (`launchSettings.json`).
+Startup auto-migrates + seeds. Health: `GET /health`. Swagger (dev): `/swagger`. App listens on `http://localhost:5028` (`launchSettings.json`); inside Docker it listens on `8080`.
 
-Health checks cover Postgres + Redis only (no Ollama readiness check). No containerized deployment path exists; there is no `Infrastructure requirements` beyond the above.
+Health checks cover Postgres + Redis (no Ollama readiness check in `GET /health`; compose `ollama` has no API-side readiness gate).
+
+**CI** — `.github/workflows/ci.yml`: runs on push to `main` and pull requests; steps: checkout, setup .NET 10, restore, `dotnet build -c Release`, `dotnet test` (unit tests only, no external services), and `docker compose config -q` (validates the compose file). No deploy job (no k8s/cloud).
 
 ---
 
 # 30. Frontend
 
-**NOT IMPLEMENTED.** No frontend project/folder exists. The `docs/` directory is empty. There is no UI, auth screens, review queue UI, or trace UI. The API exposes the SSE endpoint and Swagger for manual/demo usage; a hypothetical frontend would consume `POST /api/claims/{id}/adjudicate` (SSE), `/api/review`, and `/api/auth/login`.
+**NOT IMPLEMENTED.** No frontend project/folder exists. The `docs/` directory is **populated** (`ARCHITECTURE.md`, `RUNBOOK.md`, `CHANGELOG.md`) but there is no UI, auth screens, review queue UI, or trace UI. The API exposes the SSE endpoint and Swagger for manual/demo usage; a hypothetical frontend would consume `POST /api/claims/{id}/adjudicate` (SSE), `/api/review`, and `/api/auth/login`.
 
 ---
 
 # 31. Tests
 
-- **Project**: `tests/ClaimPilot.Tests` — references `xunit 2.9.3`, `xunit.runner.visualstudio 3.1.4`, `FluentAssertions 7.2.2`, `Microsoft.NET.Test.Sdk 17.14.1`, `coverlet.collector 6.0.4`; references Application, Domain, Infrastructure.
-- **Test files**: **NONE.** `Unit/` and `Integration/` folders exist but are empty. `dotnet test` would report "no tests".
-- Missing: deterministic engine tests, RAG/retrieval tests, orchestrator/agent tests, approval workflow tests, authorization tests, version-trap tests, prompt-injection tests, ingestion idempotency tests.
+- **Project**: `tests/ClaimPilot.Tests` — references `xunit 2.9.3`, `xunit.runner.visualstudio 3.1.4`, `FluentAssertions 7.2.2`, `Microsoft.NET.Test.Sdk 17.14.1`, `coverlet.collector 6.0.4`; references Application, Domain, **Infrastructure, and API**. No external services required (`Ollama`/`Postgres`/`Redis` are not touched by any test).
+- **Test files** (**95 tests**, all passing — re-verified on `main @ f8f177e`; per-file `[Fact]`/`[Theory]` counts):
+  | File | Covers | Tests |
+  |---|---|---|
+  | `DeterministicAdjudicationEngineTests.cs` | engine math: deductibles, coinsurance, limits, exclusions → payable/lapse | 6 |
+  | `ApplicableVersionRuleTests.cs` | `ApplicableVersionRule.Select` version traps/effective dates (uses `TestCorpus.AutoVersionTrap`) | 4 |
+  | `RefusalGroundednessTests.cs` | Ask safe-refusal, `GroundednessChecks.ContainsUnsupportedNumbers`, refusal grounding | 5 |
+  | `ApprovalServiceStateMachineTests.cs` | `ApprovalService` transitions/guards (Pending→Approved/Rejected/Edited; Assign/Escalate/Priority routes) | 10 |
+  | `JsonExtractionTests.cs` | `JsonExtraction.DeserializeArray` helper | 6 |
+  | `ReviewRoleGuardTests.cs` | controller role attributes: decision actions gated by `RequireApprovalAuthority`; Assign/Priority Supervisor+Director; ReReview/Escalate open to the three working roles; Viewer never forwarded | 5 |
+  | `Unit/AuthorityServiceTests.cs` | `AuthorityService.CanApproveAsync` thresholds (Approve/Edit); Reject/Assign/Escalate/View never amount-gated; `GetThresholdForUser` picks highest role | 5 |
+  | `Unit/AssignmentRouterTests.cs` | `AssignmentRouter.Compute` tier+amount routing matrix (Low/Normal/High/Critical × amounts → Adjuster/Supervisor/Director) | 1 (Theory, 10 cases) |
+  | `Unit/CreateClaimEndpointTests.cs` | `ClaimsController.Create`: 201 + `^CLAIM-\d{4}-\d{3}$` ClaimNumber, unknown policy 400, negative amount / future date 400, audit "Created" | 6 |
+  | `Integration/ClaimDocumentsEndpointTests.cs` | `UploadDocument`: 404 unknown claim, PDF stored + metadata + 201 + Location (client name never used on disk), `.exe` 400, magic-byte mismatch 400 | 4 |
+  | `Integration/ApprovalAuthorityFilterTests.cs` | `RequireApprovalAuthority` filter: assignee-role gate, unassigned 409, amount threshold 403/allow, non-money actions not amount-gated | 16 |
+  | `Integration/MissingDocumentsAnomalyTests.cs` | full `SupervisorOrchestrator.RunAsync` with fakes: document present → no `missing_documents`; none → anomaly fires; both runs end `Status="completed"` (proves the whole pipeline incl. ExclusionAnalyst + Drafter completes) | 2 |
+  | `Fakes.cs` + `TestCorpus` | in-memory fakes (`FakeClaimRepository`, `FakePolicyRepository`, `FakeApprovalRepository`, `FakeLLMProvider`, `FakeToolRegistry`, `FakeAuthorityService`, `FakeStorageService`, `FakeAuditService`, …) + AUT/HOM version-trap fixture | helpers |
+- Verified: `dotnet build ClaimPilot.slnx` → 0 warnings/0 errors; `dotnet test tests/ClaimPilot.Tests` → **95 passed** on `main @ f8f177e`.
+- Note: `docs/CHANGELOG.md` `[Unreleased]` still says "37 tests" — **stale**; actual count is 95.
+- Still missing (unchanged gaps): RAG/retrieval tests, per-agent unit tests (the orchestrator walkthrough covers the happy path only), evaluation-harness tests, prompt-injection *output*-sanitization tests, ingestion idempotency tests.
 
 ---
 
@@ -962,13 +1026,13 @@ Each `EvalCase{Id, Category, Question, PolicyNumber, IncidentDate, ExpectedSubst
 
 Startup seeding (idempotent) in two stages:
 
-1. **Auth** (`SeedData`, API): roles `Adjuster`, `Supervisor`, `Viewer`; users `adjuster`, `supervisor` (Supervisor+Adjuster), `viewer` with dev-only passwords (`*#2026-local-only`). No sensitive production credentials.
+1. **Auth** (`SeedData`, API): roles `Adjuster`, `Supervisor`, `Director`, `Viewer`; users `adjuster` (Adjuster), `supervisor` (Supervisor+Adjuster), `director` (Director+Supervisor+Adjuster), `viewer` (Viewer) with dev-only per-user passwords (``{Role}#2026-local-only``). No sensitive production credentials.
 2. **Corpus** (`DemoDataSeeder`, Infrastructure): runs only if no `Policies` exist.
    - **15 unique policies** across 5 product lines (AUTO/HEALTH/HOME/TRAVEL/LIFE) — 17 `WordingSpec`s = 15 base + 2 versions (AUT-2022 v1+v2, HOM-2018 v1+v2).
    - Coverage rows (Limit/Deductible/Coinsurance) per version; exclusions (e.g., EX-9/14/5/44/31/51/52/53/54/55/70/71/72/73/74/75/90/91/92/93/100/101/102/103).
    - Structured `SectionSpec` chunks with `Page`, `ContentHash`, `TokenCount` (len/4), and embeddings (Ollama when available, else deterministic 768-d).
    - **12 demo claims** (CLAIM-2023-001 … CLAIM-2022-090) mapped to policies with specific incident dates/amounts (used for demos/eval), `Status=Submitted`.
-   - Version traps deliberately included (AUT-2022: v1 $5,000/2022-01-01 vs v2 $10,000/2025-06-01; HOM-2018: v1 flood excluded vs v2 flood via FLOOD-ADDON $15,000/2024-01-01).
+   - Version traps deliberately included (AUT-2022: v1 $5,000/2022-01-01 vs v2 $10,000/2025-06-01; HOM-2018: v1 flood excluded vs v2 flood via FLOOD-ADDON $15,000/2024-01-01). Verified live end-to-end per `docs/CHANGELOG.md`/README: a 2023 collision resolves against v1 → **$5,000**; a $7,800 claim on 2026-01-20 resolves against v2 → **$7,200** (after the v2 $600 deductible).
 
 Note: the seeder count log prints "15 policies" but the spec list has 17 versions (2 duplicated policy numbers) — the `Policy` dictionary dedupes by policy number (15), `versions.Count` = 17.
 
@@ -978,13 +1042,33 @@ Note: the seeder count log prints "15 policies" but the spec list has 17 version
 
 **CRITICAL FILES** (inspect first)
 1. `src/ClaimPilot.Application/Services/SupervisorOrchestrator.cs` — the entire adjudication pipeline order, version pinning, retries, degrade path, approval-item creation, events.
-2. `src/ClaimPilot.Application/Services/Agents/ExclusionAnalystAgent.cs` — contains the runtime-breaking parse bug (Section 39).
+2. `src/ClaimPilot.Application/Services/Agents/ExclusionAnalystAgent.cs` — fixed pipeline agent: deserializes `PolicyMatchResult`, LLM shortlist, `check_exclusion` verification.
 3. `src/ClaimPilot.Application/Services/DeterministicAdjudicationEngine.cs` — payout math; the "LLM must not calculate" guarantee.
 4. `src/ClaimPilot.Infrastructure/Services/ToolRegistryService.cs` — tools, allow-lists, gated draft write, anomaly records.
 5. `src/ClaimPilot.Infrastructure/Services/RetrievalService.cs` — hybrid RAG, RRF, version-scoped retrieval, keyword fallback.
 6. `src/ClaimPilot.Infrastructure/Data/AppDbContext.cs` — the full schema (entities, indexes, pgvector column, enums-as-strings, relationships).
 7. `src/ClaimPilot.API/Program.cs` — hosting wiring, auth, migrations, seeds, health, CORS.
-8. `src/ClaimPilot.Application/Services/ApprovalService.cs` — the human review state machine.
+8. `src/ClaimPilot.Application/Services/ApprovalService.cs` — the human review state machine **+ `FinalizeDecisionAsync`** (finalizes the draft decision and issues the `DecisionLetter` on approval).
+9. `src/ClaimPilot.API/Auth/RequireApprovalAuthorityAttribute.cs` — the object-level authorization filter (assignee role + amount threshold) for approve/reject/edit.
+10. `src/ClaimPilot.Application/Services/AssignmentRouter.cs` + `AuthorityService.cs` (+ `ApprovalAuthorityOptions`) — role routing at item creation and threshold checks.
+11. `src/ClaimPilot.API/Controllers/ClaimsController.cs` + `Infrastructure/Services/FileStorageService.cs` — claim intake and document upload/storage.
+
+**NEW POST-v1.0.0 FILES**
+- `src/ClaimPilot.Application/Services/{AssignmentRouter.cs, AuthorityService.cs, ApprovalAuthorityOptions.cs}` + `Interfaces/Review/IAuthorityService.cs` — assignment routing + approval authority.
+- `src/ClaimPilot.API/Auth/{RequireApprovalAuthorityAttribute.cs, ApprovalAction.cs}` — authorization filter + action enum.
+- `src/ClaimPilot.API/Dtos/{CreateClaimRequest.cs, UploadDocumentRequest.cs, ClaimDocumentDto.cs}`; `src/ClaimPilot.API/Helpers/ClaimUploadValidation.cs`.
+- `src/ClaimPilot.Infrastructure/Services/FileStorageService.cs` + `Configuration/StorageOptions.cs`.
+- `migrations/20260913205511_ChangeAssignedToEnumAndAddAssignedAt.cs`.
+- `tests/ClaimPilot.Tests/Unit/{AssignmentRouterTests,AuthorityServiceTests,CreateClaimEndpointTests}.cs` and `tests/ClaimPilot.Tests/Integration/{ApprovalAuthorityFilterTests,ClaimDocumentsEndpointTests,MissingDocumentsAnomalyTests}.cs`.
+- `docs/SECURITY.md`, `docs/SYSTEM_EXPLAINER.md` (authority model + whole-system explainer).
+
+**NEW v1.0.0 FILES**
+- `src/ClaimPilot.Domain/Services/ApplicableVersionRule.cs` — pure version-selection rule; `PolicyRepository.GetApplicableVersionAsync` delegates to it.
+- `src/ClaimPilot.Application/Common/{GroundednessChecks.cs, JsonExtraction.cs}` — extracted rules (number grounding + JSON array extraction) now unit-tested.
+- `tests/ClaimPilot.Tests/` — `DeterministicAdjudicationEngineTests`, `ApplicableVersionRuleTests`, `RefusalGroundednessTests`, `ApprovalServiceStateMachineTests`, `JsonExtractionTests`, `ReviewRoleGuardTests`, `Unit/{AuthorityServiceTests,AssignmentRouterTests,CreateClaimEndpointTests}`, `Integration/{ApprovalAuthorityFilterTests,ClaimDocumentsEndpointTests,MissingDocumentsAnomalyTests}`, `Fakes.cs`/`TestCorpus` (95 tests — see Section 31).
+- `Dockerfile`, `docker-compose.yml`, `.env`/`.env.example`, `.dockerignore`, `docker/initdb/001-vector.sql`.
+- `.github/workflows/ci.yml` + `.github/pull_request_template/*` (8 templates).
+- `README.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md`, `docs/CHANGELOG.md`, `docs/SECURITY.md`, `docs/SYSTEM_EXPLAINER.md`.
 
 **IMPORTANT FILES**
 - `src/ClaimPilot.Infrastructure/Data/Seed/CorpusSpec.cs` — source of demo policy wordings/values (eval ground truth).
@@ -1013,23 +1097,24 @@ Note: the seeder count log prints "15 policies" but the spec list has 17 version
 ClaimPilot.API ──> ClaimPilot.Application ──> ClaimPilot.Domain
 ClaimPilot.API ──> ClaimPilot.Infrastructure ──> ClaimPilot.Application / ClaimPilot.Domain
 ClaimPilot.Infrastructure ──> ClaimPilot.Application ──> ClaimPilot.Domain
-ClaimPilot.Tests ──> Application / Domain / Infrastructure
+ClaimPilot.Tests ──> Application / Domain / Infrastructure / API
 ```
 
 Runtime composition:
 ```text
 Controllers
-   ├── Approve/Reject/Edit → ApprovalService → ApprovalRepository / AuditService → Db
+   ├── Approve/Reject/Edit → RequireApprovalAuthority filter → ApprovalService → ApprovalRepository / AuditService → Db
    ├── Ask → AskService → PolicyRepository + RetrievalService(IEmbeddingProvider, AppDbContext) → ILLMProvider → Db
    ├── Adjudicate (SSE) → SupervisorOrchestrator
    │        ├── CoverageMatcherAgent → ToolRegistry(RetrievePolicyVersioned, ListCoverageItems)
-   │        ├── ExclusionAnalystAgent → LLM(shortlist) + ToolRegistry(CheckExclusion)   [broken]
+   │        ├── ExclusionAnalystAgent → LLM(shortlist) + ToolRegistry(CheckExclusion)
    │        ├── DeterministicAdjudicationEngine
    │        ├── AnomalyDetectorAgent → ToolRegistry(RecordAnomaly)
-   │        └── AdjudicationDrafterAgent → LLM(rationale)
+   │        └── AdjudicationDrafterAgent → LLM(rationale) + ToolRegistry(DraftAdjudication)
    │        └── all tools → Repositories / AppDbContext(pgvector)
    │        └── events → OrchestrationEventSink → SSE channel
    └── Ingest → DocumentIngestionService → extractors → chunking → OllamaEmbedding → ChunkRepository
+   └── Create claim / Upload document → ClaimRepository (ClaimNumber/ClaimDocument rows) + FileStorageService → {Storage:UploadRoot}
 ```
 
 ---
@@ -1060,18 +1145,20 @@ sequenceDiagram
     CM->>TR: RetrievePolicyVersioned + ListCoverageItems
     TR-->>CM: PolicyMatchResult, CoverageLine[]
     CM-->>O: AgentResult{citation, coverage}
-    O->>EA: ExclusionAnalyst.ExecuteAsync   // JsonException -> retries -> DomainException
+    O->>EA: ExclusionAnalyst.ExecuteAsync   // LLM shortlist + check_exclusion verify
     O->>E: Compute(ComputationRequest)
     E-->>O: Computation{Payable, StepTrace}
     O->>AD: AnomalyDetector.ExecuteAsync
     AD->>TR: RecordAnomaly(...)
     O->>DR: AdjudicationDrafter.ExecuteAsync (state: payable/citations)
+    DR->>TR: DraftAdjudication(decision_json)  // persists Decision{IsFinal=false} + audit DraftCreated
     DR->>LLM: rationale completion
-    DR-->>O: draft{decision, proposed_amount, citaions}
-    O->>AP: Add ApprovalItem{Pending, SLA, Summary=draft}
+    DR-->>O: draft{decision, proposed_amount, citations}
+    O->>AP: Add ApprovalItem{Pending, SLA, AssignedTo=Router.Compute(priority, amount)→role, AssignedAt, Summary=draft}
     O-->>C: RunResult{ReviewRequired=true, ApprovalItemId}
     C-->>Client: SSE events + run_complete
-    RV->>AP: Approve/Reject/Edit (+history+audit)
+    RV->>AP: Approve/Reject/Edit (RequireApprovalAuthority: assigned role + amount threshold)
+    RV->>Db: FinalizeDecision (approve only): Decision.IsFinal=true, FinalDecisionId, DecisionLetter, audit "Finalised"
 ```
 
 ---
@@ -1090,7 +1177,7 @@ Matched Policy Version: AUT-2022 v2 (Effective 2025-06-01)  [NOT v1 — v1 expir
    ↓ Coverage Matcher (deterministic)
 Retrieved Evidence: v2 "Collision Coverage Limit $10,000", "Deductible $600"
    │
-   ↓ Exclusion Analyst  (BROKEN TODAY — would evaluate EX-9/14/5/44 for "collision")
+   ↓ Exclusion Analyst: LLM shortlists EX-9/14/5/44 for "collision"; check_exclusion verifies each → none applicable
 Exclusions: none applicable (v2; rideshare etc. not in scenario)
    │
    ↓ Deterministic Engine
@@ -1103,12 +1190,12 @@ Anomalies: suspicious_amount (Info)
    ↓ Adjudication Drafter (LLM only writes rationale; numbers injected)
 AI Recommendation: decision=Approve, proposed_amount=$7,200, rationale (LLM prose), citations=v2 sections
    │
-   ↓ Human Review Queue: ApprovalItem Pending, Priority computed, SLA deadline, Summary=draft JSON
-Human Review: supervisor approves
+   ↓ Human Review Queue: ApprovalItem Pending, priority + SLA deadline, AssignedTo=Adjuster (Router: Normal, $7,800 from PRIORITY), AssignedAt, Summary=draft JSON
+Human Review: assignee role approves (POST /api/review/{approvalItemId}/approve) — RequireApprovalAuthority: $7,200 ≤ Adjuster $10,000
    │
-Final Decision: **NOT IMPLEMENTED** — no IsFinal Decision/letter written; ApprovalItem becomes Approved.
+Final Decision: DraftAdjudication Decision (draft_id) → IsFinal=true, ApprovalItemId linked, run.FinalDecisionId set; DecisionLetter issued (mandated sections, PII redacted); AuditLog "Finalised".
 ```
-(Evaluation case T-02 expects exactly `$7,200` for this scenario.)
+Shown as Approve → $7,200 payable. Proviso: with the authority model, the Human Review step requires the item's `AssignedTo` role AND `ProposedAmount ≤ threshold` — with defaults, an Adjuster-assigned item can be approved by an Adjuster only up to $10,000, so `$7,200` passes. (Per the review-role and `ApprovalAuthorityFilterTests`.)
 
 ---
 
@@ -1121,50 +1208,56 @@ Final Decision: **NOT IMPLEMENTED** — no IsFinal Decision/letter written; Appr
 | Version-aware retrieval (pin version before search) | Wrong-version payouts are the #1 business error; date-bound deterministic selection | Version on chunk text only | Implemented in selection + every query scoped by `PolicyVersionId` |
 | Hand-written supervisor orchestrator, no agent framework | Control, auditability, determinism, no external runtime | LangChain/AutoGen/Semantic Kernel | Implemented (fixed 4-agent order, retry/backoff, timeout, degrade) |
 | Deterministic engine for all money math | Reproducibility, regulatory-proof step trace; LLMs hallucinate arithmetic | LLM computes payout | Implemented; LLM given amounts and told not to invent |
-| Human review queue w/ mandatory approval | No auto-final decisions; audit trail; SLA/escalation | Auto-approve for low risk | Implemented (state machine); but final-decision/letter creation missing |
+| Human review queue w/ mandatory approval | No auto-final decisions; audit trail; SLA/escalation | Auto-approve for low risk | Implemented (state machine); **approval finalizes the decision + issues the letter** (`FinalizeDecisionAsync`); reject path still has no letter/artifact |
 | Provider abstraction (`ILLMProvider`/`IEmbeddingProvider`) | Swap Ollama→cloud without touching Application | none | Implemented (Ollama only today; cost hardcoded 0) |
 | Hybrid retrieval (dense + ILIKE + RRF) | Robust to embedding-quality failure; keyword fallback | pure dense; pure BM25 | Implemented (`Fuse`, k=60) |
 | Identity + JWT | Standard authn/authz, roles | Custom tokens, cookies | Implemented |
+| Approval-authority model (assignee role + per-role amount thresholds) | Approve/reject/edit limited to the item's `AssignedTo` role keeps low-value claims routable while big amounts escalate; object-level check via an authorization filter (`RequireApprovalAuthority`) | per-user ownership; static role-only authz | Implemented (Adjuster $10k / Supervisor $100k / Director $1B; `AssignmentRouter` assigns at creation) |
 
 ---
 
 # 39. Known Problems / Technical Debt
 
-Ranked by severity. Verified by code reading; `[verify at runtime]` marks items not empirically executed.
+Ranked by severity (re-ranked after the post-v1.0.0 fixes on `main @ f8f177e`). Verified by code reading; `[verify at runtime]` marks items not empirically executed.
 
-**CRITICAL**
-1. **Exclusion Analyst agent always fails → every adjudication degrades.** `ExclusionAnalystAgent.ExecuteAsync` deserializes the `RetrievePolicyVersioned` output (a serialized `PolicyMatchResult` **object**) into `List<ExclusionCandidate>` (`ExclusionAnalystAgent.cs:54`). System.Text.Json throws `JsonException` for object→List (empirically verified). No try/catch → the agent throws on attempt 0, retries exhaust `MaxRetries` (3), then `SupervisorOrchestrator` catches and because `EnableFallbackRag=true` returns a **degraded RunResult with no approval item and no actual RAG**. Net effect: claim adjudication produces "degraded" results and **never reaches the human queue**. Fix requires: retrieve the exclusions list for the version and pass it as an array to the agent, then verify each candidate.
+**RESOLVED (kept for the record)**
+- ~~Exclusion Analyst `JsonException`~~ — **FIXED**: `ExclusionAnalystAgent` deserializes `PolicyMatchResult` and verifies exclusions via `check_exclusion`.
+- ~~"Exclusion evidence path doubly broken"~~ — **FIXED**: `PolicyMatchResult.Exclusions` is populated by `RetrievePolicyVersionedAsync`.
+- ~~No final decision/letter~~ — **FIXED**: approve path calls `FinalizeDecisionAsync` (Decision.IsFinal=true, FinalDecisionId, DecisionLetter, audit).
+- ~~`GET /api/claims/{id}/runs` empty~~ — **FIXED**: `ClaimRepository.GetByIdAsync` now `Include(Runs→ApprovalItems/Anomalies/FinalDecision)` + `Include(Documents)`.
 
-2. **Exclusion evidence path is doubly broken**: even if the parse didn't throw, `PolicyMatchResult` contains no exclusions, so `candidates` would be empty and no `check_exclusion` would ever run; `state.ApplicableExclusions` (→ engine) would always be empty.
-
-3. **"Fallback RAG" is fake**: the degraded path returns a hardcoded `RunResult` (Status="degraded", summary claims "ran safe plain-RAG fallback") but performs **no retrieval**. It also silently swallows the error that should drive an alert.
+**CRITICAL (still open)**
+1. **"Fallback RAG" is fake**: the degraded path returns a hardcoded `RunResult` (Status="degraded", summary claims "ran safe plain-RAG fallback") but performs **no retrieval** and creates no approval item; it also silently swallows the error that should drive an alert. Now reached only on *genuine* agent failures (the Exclusion bug is fixed), but still wrong on its face.
+2. **Rejected claims get no final artifact**: `RejectAsync` leaves the draft `Decision` at `IsFinal=false` and issues no letter — no final "Rejected" decision row/`DecisionLetter`, so a rejection has no auditable final output beyond the `ApprovalItem` status.
+3. **`EditAsync` returns `ApprovalStatus.Pending` while persisting `Edited`** — inconsistent signaling; `ReReviewAsync` then required to return to `Pending`.
+4. **`ApprovalItem` "Created" history row never written** — `ReviewQueueReader.OriginalDraftJson = History.FirstOrDefault(Created)` always falls back to `Summary`.
+5. **No unassign/return-to-pool path**: items are created assigned (good), but the only ways to move them are `AssignAsync` (Supervisor+Director only) or the SLA worker — an Adjuster who shouldn't act on an item cannot hand it back, and combined with the 409 gate this can strand an item if only a non-member role can reach it.
 
 **HIGH**
-4. **No final decision/letter**: `DecisionLetter`, `Decision.IsFinal`, `AdjudicationRun.FinalDecision` are never written; `ApprovalService.ApproveAsync` flips `ApprovalItem.Status` only. The "final decision" narrative in the docs/comments does not exist in code.
-5. **`GET /api/claims/{id}/runs` returns empty** `[verify]`: `ClaimRepository.GetByIdAsync` is `AsNoTracking` without `Include(r => r.Runs)` (nor ApprovalItems/FinalDecision), so `claim.Runs` is unpopulated.
-6. **No tests exist** for anything (engine, RAG, workflow, auth, version traps, injection) despite a wired test project.
-7. **Orchestrator always creates a review item even for a zero/insufficient claim** (`Sufficient=false` cases still go through the normal completed path) — the InsufficientInformation decision type is essentially unreachable in the pipeline.
+6. **Claim-not-found maps to HTTP 400, not 404** (`DomainException` in `ClaimsController`/`ReviewController`).
+7. **Ask Q&A logic duplicated** (`AskService.AskAsync` vs `RetrievalService.AskAsync`), only the Application one is wired.
+8. **Orchestrator always creates a review item even for a zero/insufficient engine result** — the `InsufficientInformation` decision type is effectively unreachable in the pipeline.
+9. **`AssignmentService` (strategy-based) and `ISlaPolicy`/`DefaultSlaPolicy` are dead wiring**: real assignment happens in `AssignmentRouter` at item creation and the SLA worker uses hardcoded 8h/16h/2h rules; the `Assignment:*`/`Sla:*` config keys don't bind to the option members (code defaults authoritative).
+10. **`RunDto.PolicyVersion` is always `null`** (`ClaimsController.Runs` passes a literal `null` even though the run's pinned version is available).
+11. **No tests cover the model-backed RAG path**: engine/version/refusal/approval/roles/authority/assignment + the full-orchestrator walkthrough are tested; the LLM shortlist/retrieval journeys are not.
 
 **MEDIUM**
-8. `EditAsync` sets entity `Status=Edited` but returns `ReviewActionResult(..., ApprovalStatus.Pending, ...)` — inconsistent signaling; `ReReviewAsync` is then required to go back to `Pending`.
-9. `ApprovalItem` "Created" history row is never written (orchestrator adds item w/o history), so `ReviewQueueReader`'s `OriginalDraftJson = History.FirstOrDefault(Created)` always falls back to `Summary`.
-10. `ClaimsController`/`ReviewController` claim-not-found throws `DomainException` → HTTP **400**, not 404 (`GET /api/claims/{id}`, approve/reject/edit on missing id).
-11. Ask Q&A logic duplicated (`AskService.AskAsync` vs `RetrievalService.AskAsync`), only one wired.
-12. Seed embedding fallback (deterministic bucket vectors) silently degrades semantic retrieval if Ollama is down at seed time — re-seeding needed for real embeddings, and the seeder is guarded by "if any policy exists" (won't re-seed).
-13. `ChunkRepository.ExistsByHashAsync` checks hash **globally**, but index uniqueness is per `(PolicyVersionId, ContentHash)`; duplicate content across versions can slip through pre-check and then throw on insert.
-14. `OrchestratorOptions.MaxIterations` and `AgentContext.MaxIterations`, `IPriorityCalculator`, `IUsageTracker` (in orchestrator), `DraftResult` record, `ILLMProvider` in `CoverageMatcherAgent`, `RequiresAudit` on `RecordAnomaly`, `IsGatedWrite` enforcement — all injected/defined but **unused or ineffective**.
-15. `appsettings.json` names `Sla:CriticalMinutes/HighMinutes/...` and `Assignment:PoolAdjusters/...` that do not bind to the actual `SlaRuleSet`/`AssignmentOptions` members (strategic keys like `Assignment:Strategy` absent) — defaults are effectively authoritative.
-16. `PolicyVersionStatus Superseded` is seeded but never set programmatically; `SupersedesVersionId` has no relationship/fk.
-17. SSE cancellation + `Task.Run` around `RunAsync` with the same `ct` can double-cancel; SSE always buffers whole app; errors after `error` event may write a second terminal frame.
+12. Dead/ineffective wiring: `OrchestratorOptions.MaxIterations`, `AgentContext.MaxIterations`, `IPriorityCalculator`, `IUsageTracker`, `DraftResult`, `ILLMProvider` injected into `CoverageMatcherAgent`, `RequiresAudit` on `RecordAnomaly` (only a flag), `IsGatedWrite` enforcement (never blocks; `GatedWriteException` never thrown).
+13. `PolicyVersionStatus.Superseded` is seeded but never set programmatically; `SupersedesVersionId` has no relationship/fk.
+14. SSE: same `ct` shared by request handler + `Task.Run`, so a client disconnect can double-cancel; an error after the `error` event may still write a second terminal frame.
+15. Seed embedding fallback (deterministic bucket vectors) silently degrades semantic retrieval if Ollama was down at seed time; guarded by "if any policy exists", so it won't re-seed.
+16. `ChunkRepository.ExistsByHashAsync` checks hash globally while uniqueness is per `(PolicyVersionId, ContentHash)` — cross-version duplicates can throw on insert.
+17. Weak deterministic exclusion check: `IsApplicable` matches ≥2 keywords (words >4 chars) — false positives/negatives possible; no agent-level tests yet.
+18. Evaluation corpus (26 cases) still has **no harness** — dead code.
+19. Uploaded `DocumentType` is validated but **not persisted**; upload storage has no quota/size accounting and `uploads/` is not in `.gitignore`.
 
 **LOW**
-18. Sync-over-async in `OllamaLLMProvider.RaiseUsage` (`GetAwaiter().GetResult()`).
-19. Enums stored as ints for `CoverageType`, `PolicyStatus`, `PolicyVersionStatus` and strings elsewhere — inconsistent.
-20. `EstimatedLocalCost` useless (always 0); cost accounting is nominal.
-21. `ClaimPilot.API.http` still references `/weatherforecast/` (stale template).
-22. Empty `docs/` dir committed.
-23. `Comments on `DemoDataSeeder` claim "15 wordings" while 17 versions are seeded (15 policies × versions).
-24. Dev signing key + DB password in committed `appsettings.json` (dev-only posture).
+20. Sync-over-async `GetAwaiter().GetResult()` in `OllamaLLMProvider.RaiseUsage`.
+21. Enums stored as ints (`CoverageType`, `PolicyStatus`, `PolicyVersionStatus`) vs strings elsewhere — inconsistent.
+22. `EstimatedLocalCost` always 0; cost accounting is nominal.
+23. `ClaimPilot.API.http` references stale `/weatherforecast/` template endpoint.
+24. Dev signing key + DB password in committed `appsettings.json` (dev-only posture; `.env`/compose override in Docker); CORS `AllowAnyOrigin/Header/Method`; no rate limiting; no secret management.
+25. No frontend; SSE has no client; Swagger only in Development.
 
 ---
 
@@ -1180,7 +1273,7 @@ Ranked by severity. Verified by code reading; `[verify at runtime]` marks items 
 - Traceability: every run records policy-version selection, agent JSON in/out, tool calls, computation steps, anomalies, token usage, audit rows; a trace endpoint reconstructs the whole run.
 
 ## 5-minute technical explanation
-Same as above + details: JWT/Identity roles (Adjuster/Supervisor/Viewer; Supervisor-only for assign/escalate/priority + audit + statistics); SSE adjudication endpoint (`text/event-stream` with channel + events); hybrid retrieval via raw SQL `Embedding <=> @vector` scoped by PolicyVersionId fused with ILIKE keyword search by reciprocal rank fusion (k=60); HNSW `vector_cosine_ops` index from the initial migration; structural chunking max 1200 chars, SHA-256 idempotency; grounded Ask refuses answers whose numbers aren't in the corpus (ContainsUnsupportedNumbers); SLA background worker with Redis lock; ingestion supports PDF/MD/DOCX (PdfPig / OpenXML). Then be honest: exclusion agent currently broken (degrades runs), no final decision/letter persistence, no tests, no frontend/docker.
+Same as above + details: JWT/Identity roles (Adjuster/Supervisor/Director/Viewer); review decision actions are object-level via `RequireApprovalAuthority` — the caller must hold the item's `AssignedTo` role (403 otherwise, 409 if unassigned) and approve/edit additionally require `ProposedAmount ≤` the role threshold (Adjuster $10k / Supervisor $100k / Director $1B); items are assigned at creation by `AssignmentRouter` (priority tier + amount → role) with `AssignedAt`; a background SLA worker escalates Adjuster>8h→Supervisor, Supervisor>16h→Director, unassigned>2h by priority (Redis lock); SSE adjudication endpoint (`text/event-stream` with channel + drain task); hybrid retrieval via raw SQL `Embedding <=> @vector` scoped by PolicyVersionId fused with ILIKE keyword search by reciprocal rank fusion (k=60); HNSW `vector_cosine_ops` index from the initial migration; structural chunking max 1200 chars, SHA-256 idempotency; grounded Ask refuses answers whose numbers aren't in the corpus (`ContainsUnsupportedNumbers`); supervisor approval finalizes the decision + issues a `DecisionLetter`; claim intake (`POST /api/claims`) + document upload with magic-byte sniffing + disk storage under `Storage:UploadRoot`; **95 tests** (engine determinism, version traps, refusal/groundedness, approval state machine, role gating, authority thresholds, assignment router, claim create, document upload, authority filter, full-orchestrator) verified green on `main @ f8f177e`; Docker compose stack (pgvector/redis/ollama/api) + GitHub Actions CI. Honest caveats: fake "degraded" fallback doesn't really run RAG, no reject-letter path, `Edit` returns Pending, "Created" history row missing, no frontend/eval harness, allow-all CORS, no rate limiting.
 
 ## Likely interviewer questions & answers (based on ACTUAL code)
 - **Why RAG?** Structured coverage tables already exist (CoverageItem/Exclusion) for exact numbers, but full text of wordings (limits, exclusions, endorsements) is needed; RAG grounds answer/rationale text in version-pinned policy chunks, and Ask has a groundedness number check.
@@ -1189,27 +1282,31 @@ Same as above + details: JWT/Identity roles (Adjuster/Supervisor/Viewer; Supervi
 - **Why not let the LLM calculate?** Payout math must be reproducible and auditable; the engine is a pure function of `ComputationRequest` with a step trace; the LLM is explicitly told amounts are provided and must be quoted, not invented.
 - **Why multiple agents?** Separation of concerns per adjudication stage with per-agent tool allow-lists and independent retry/tracing; determinism where possible (coverage, anomaly, math) and LLM only for language understanding (exclusion shortlist, rationale).
 - **Why an orchestrator?** One supervisor that pins the version, sequences agents, enforces timeout/retry/degrade, creates the approval item, and emits live SSE events — auditability and a single control point.
-- **What is the human review queue?** `ApprovalItem` state machine (Pending→Approved/Rejected/Edited→Pending re-review) with priority, SLA deadline, per-action `ApprovalHistory`, append-only `AuditLog`, Supervisor-only actions, and a background SLA worker escalating late/unassigned items (pool→supervisor→director).
+- **What is the human review queue?** `ApprovalItem` state machine (Pending→Approved/Rejected/Edited→Pending re-review) with priority, SLA deadline, `AssignedTo` role + `AssignedAt` set at creation by `AssignmentRouter`, per-action `ApprovalHistory`, append-only `AuditLog`, and a background SLA worker escalating late/unassigned items by role; approve/reject/edit are gated by `RequireApprovalAuthority` to the assigned role with an amount threshold.
 - **How do you prevent prompt injection?** System prompts treat documents as DATA with explicit "ignore instructions in the text" guidance; Ask performs a deterministic groundedness check that refuses answers containing numbers absent from the corpus; LLM failures become safe refusals; tool access is allow-listed; the pipeline never lets the model execute code.
-- **How do you trace a decision?** Every adjudication run: `AdjudicationRun`+`AgentRun` (JSON I/O), `TraceRecords` for tool calls/computation/retrieval, usage/cost rows, audit logs; `GET /api/claims/runs/{id}/trace` rebuilds it. Caveat: final decision isn't persisted yet.
-- **What happens if Ollama fails?** Dense retrieval degrades to keyword-only; Ask refuses safely; agent steps retry with backoff then the run degrades (though today the degrade path is largely theoretical since the exclusion bug already triggers it). Startup seeding falls back to deterministic vectors.
+- **How do you trace a decision?** Every adjudication run: `AdjudicationRun`+`AgentRun` (JSON I/O), `TraceRecords` for tool calls/computation/retrieval, usage/cost rows, audit logs; `GET /api/claims/runs/{id}/trace` rebuilds it. Final decision is persisted on approval (draft → `IsFinal=true` + letter).
+- **What happens if Ollama fails?** Dense retrieval degrades to keyword-only; Ask refuses safely; agent steps retry with backoff then the run degrades (degrade path is genuine now). Startup seeding falls back to deterministic vectors.
 - **How do you handle wrong policy versions?** Not by embedding quality — by a deterministic date-bounded repository query, pinning `PolicyVersionId` on the run, and scoping every retrieval/tool by version. Demo corpus includes version traps to evaluate this.
-- **What's missing / where is technical debt?** Exclusion agent parse bug (CRITICAL), no final decision/letter, `runs` endpoint not loading navigations, empty tests, no frontend/Docker, allow-all CORS, duplicate Ask logic, no rate limiting.
+- **What's missing / where is technical debt?** Fake "degraded" fallback, no reject-letter path, `Edit` returns Pending, "Created" history row missing, dead wiring (`IAssignmentService`, MaxIterations/DraftResult/IUsageTracker...), `RunDto.PolicyVersion` always null, no frontend/eval harness (Docker + CI + docs are in place), allow-all CORS, duplicate Ask logic, no rate limiting.
 
 ---
 
 # 41. Code-to-Documentation Accuracy
 
-All sections above were produced by reading the source (not from memory or assumptions). The full verification sweep covered: controllers/endpoints, entities, services/interfaces, agent+tool implementations, prompts, configuration, migrations, tests, TODO/FIXME markers, authorization, DB queries, Ollama/embedding calls, vector operations, SSE, approval/review logic, and a clean `dotnet build ClaimPilot.slnx` (0 warnings/0 errors). The one runtime-equivalent experiment actually executed was the `System.Text.Json` object→`List<T>` behavior used to confirm CRITICAL bug #1. Everything else is direct code reading; `[verify]`-marked items are inferences that should be confirmed at runtime.
+All sections above were produced by reading the source (not from memory or assumptions). The verification sweep for this revision covered: controllers/endpoints, entities, services/interfaces, agent+tool implementations (incl. the ExclusionAnalyst fix and `ToolRegistryService` persistence), prompts, configuration, migrations, tests, authorization (incl. `RequireApprovalAuthority`, authority thresholds, assignment routing), DB queries, Ollama/embedding calls, vector operations, SSE, approval/review flow, decision-letter finalization, Docker/compose/CI, README/CHANGELOG, and a clean `dotnet build ClaimPilot.slnx` (0 warnings/0 errors) plus **`dotnet test` → 95 passed** — re-verified on `main @ f8f177e` (2026-09-14). Items marked `[verify at runtime]` are inferences that should be confirmed against running infrastructure (Postgres/Redis/Ollama).
 
 ---
 
 # 42. UNKNOWN / NEEDS CODE VERIFICATION Log
 
-- Exclusion-Analyst JsonException causing *every* run to degrade — extremely high confidence (deserialize semantics verified), but no in-repo integration test proves the full-run outcome; run `POST /api/claims/{id}/adjudicate` after seeding to confirm.
-- `GET /api/claims/{claimId}/runs` empty results — high confidence (NoTracking + no Include), needs runtime confirmation.
-- Whether `Edit` returning `Pending` while persisting `Edited` causes observable queue inconsistencies.
+- Whether `FinalResult` appears in the run trace only after approval (implementation reads `run.FinalDecision`; approve populates it) — confirm against a live approve flow.
+- Whether REJECT leaves the draft decision at `IsFinal=false` with no letter (expected) — confirm in the review flow.
+- Whether the Exclusion-Analyst LLM shortlist + deterministic `check_exclusion` combination yields sane exclusion picks on seeded corpus claims (weak-keyword matching risk; needs an agent-level test or manual run).
+- Whether the `RequireApprovalAuthority` live flows return the intended 403/409/400 in practice (covered by 16 fake-based integration tests; confirm against real JWT + Postgres).
+- Whether the SLA worker's hardcoded 8h/16h/2h escalations and the `EscalateAsync` → `ReReviewAsync` return-to-work flow behave as designed at runtime.
+- Whether heavy concurrent `POST /api/claims/{id}/documents` writes hit `FileMode.CreateNew` collisions given the generated `{documentId}` path (no DB uniqueness on `StoredAt`).
 - Whether Redis is genuinely optional at runtime (worker guards Redis via try/catch only at DI connect time).
+- Whether the compose `ollama` boot-time model pulls behave on cold start (llama3.2 + nomic-embed-text) and whether the API's first run waits long enough.
 
 ---
 
@@ -1240,23 +1337,40 @@ Stack:         .NET 10 (net10.0), ASP.NET Core Web API, EF Core 10 + Npgsql + pg
                StackExchange.Redis, ASP.NET Core Identity + JWT Bearer
 Architecture:  Clean Architecture: ClaimPilot.Domain / Application / Infrastructure / API
 Database:      PostgreSQL (one instance) + pgvector vector(768) + HNSW cosine index; no JSON columns;
-               enums-as-strings via HasConversion; 2 migrations; auto-migrate+seed on startup
+               enums-as-strings via HasConversion; 3 migrations; auto-migrate+seed on startup
 LLM:           Ollama only — llama3.2 (chat /api/chat, temp 0.1, num_predict 2048)
 Embedding:     Ollama nomic-embed-text (768-d) + deterministic 768-d fallback in seeder
-Agents:        4 fixed agents (Coverage Matcher [no LLM], Exclusion Analyst [LLM shortlist —
-               BROKEN], Anomaly Detector [heuristics], Adjudication Drafter [LLM rationale]) under
-               SupervisorOrchestrator; tools via ToolRegistryService with allow-lists + gated draft
+Agents:        4 fixed agents (Coverage Matcher [no LLM], Exclusion Analyst [LLM shortlist +
+               check_exclusion verify — FIXED], Anomaly Detector [heuristics], Adjudication Drafter
+               [LLM rationale + persists draft]) under SupervisorOrchestrator; tools via
+               ToolRegistryService with allow-lists + gated draft write returning draft_id
 Core workflow: claim → pin policy version (incident date) → agents → DeterministicAdjudicationEngine
-               (deductible → coinsurance → limit → payable, step trace) → ApprovalItem (Pending)
-Review workflow: ApprovalService state machine (Pending→Approved/Rejected/Edited→Pending) + SLA
-               worker (Redis lock) + Supervisor-only assign/escalate/priority + audit + statistics
-Authentication: JWT Bearer HS256; roles Adjuster / Supervisor / Viewer (seeded dev users)
-Realtime:      SSE on POST /api/claims/{id}/adjudicate (orchestrator events + run_complete)
-Current status: Pipeline skeleton IMPLEMENTED; Exclusion Analyst parse bug makes live runs degrade
-               at runtime; final decision/letter persistence NOT implemented; tests/ frontend/
-               docker NOT implemented; EvaluationCorpus dataset defined but no harness
+               (deductible → coinsurance → limit → payable, step trace) → draft Decision (IsFinal=false)
+               → ApprovalItem (Pending, AssignedTo role via AssignmentRouter + AssignedAt)
+Claim intake:  POST /api/claims (Adjuster,Supervisor) → ClaimDto + ClaimNumber; POST .../documents upload
+               (ClaimUploadRules allow-list + ContentTypeSniffer magic bytes) → FileStorageService disk
+Review workflow: ApprovalService state machine (Pending→Approved/Rejected/Edited→Pending); approve
+               FINALIZES decision (IsFinal=true, FinalDecisionId) + issues DecisionLetter; approve/reject/
+               edit object-level via RequireApprovalAuthority (assigned role + amount threshold
+               Adjuster 10k / Supervisor 100k / Director 1B; unassigned→409); assign/priority
+               Supervisor,Director; re-review/escalate Adjuster,Supervisor,Director; SLA worker (Redis
+               lock, hardcoded 8h/16h/2h by role); audit + statistics Supervisor-only
+Authentication: JWT Bearer HS256; roles Adjuster / Supervisor / Director / Viewer (seeded users incl.
+               director per-user dev passwords)
+Realtime:      SSE on POST /api/claims/{claimId}/adjudicate (orchestrator events + drain + run_complete)
+Ops:           Dockerfile + docker-compose (pgvector pg16 / redis7 / ollama / api; ports
+               5433/6380/11435/8080) + initdb vector.sql + .env(.example) + GitHub Actions CI
+               (build + 95 tests + docker compose config)
+Docs:          README.md, docs/ARCHITECTURE.md, docs/RUNBOOK.md, docs/CHANGELOG.md, docs/SECURITY.md,
+               docs/SYSTEM_EXPLAINER.md, 8 PR templates
+Current status: main @ f8f177e (post-v1.0.0) — pipeline end-to-end; GET .../runs FIXED; 95 tests green;
+               0 build warnings/errors. Open issues: fake degraded fallback, no reject letter,
+               Edit returns Pending, "Created" history row absent, dead IAssignmentService wiring,
+               no frontend/eval harness, CORS/rate-limit/secret-mgmt gaps
 Critical files: SupervisorOrchestrator.cs, ExclusionAnalystAgent.cs, DeterministicAdjudicationEngine.cs,
-               ToolRegistryService.cs, RetrievalService.cs, AppDbContext.cs, Program.cs, ApprovalService.cs
-Known issues:  See Section 39 (CRITICAL#1 Exclusion Analyst JsonException; #3 fake RAG fallback;
-               HIGH#4 no final decision; #5 runs endpoint; #6 no tests)
+               ToolRegistryService.cs, ApprovalService.cs, RequireApprovalAuthorityAttribute.cs,
+               AssignmentRouter.cs, AuthorityService.cs, ClaimsController.cs, RetrievalService.cs,
+               FileStorageService.cs, AppDbContext.cs, Program.cs
+Known issues:  See Section 39 (fake RAG fallback; reject-letter gap; Edit/Pending; Ask duplication;
+               dead wiring; eval corpus unused)
 ```

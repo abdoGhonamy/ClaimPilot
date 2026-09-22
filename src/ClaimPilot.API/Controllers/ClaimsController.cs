@@ -19,7 +19,7 @@ namespace ClaimPilot.API.Controllers;
 
 [ApiController]
 [Route("api/claims")]
-[Authorize(Roles = "Adjuster,Supervisor,Viewer")]
+[Authorize(Roles = "Adjuster,Supervisor,Director,Viewer")]
 public sealed class ClaimsController : ControllerBase
 {
     private readonly IClaimRepository _claims;
@@ -69,7 +69,7 @@ public sealed class ClaimsController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <returns>201 with the created claim and a Location header.</returns>
     [HttpPost]
-    [Authorize(Roles = "Adjuster,Supervisor")]
+    [Authorize(Roles = "Adjuster,Supervisor,Director")]
     [ProducesResponseType<ClaimDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ClaimDto>> Create([FromBody] CreateClaimRequest request, CancellationToken ct)
@@ -114,7 +114,7 @@ public sealed class ClaimsController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <returns>201 with the stored document metadata and a Location header.</returns>
     [HttpPost("{claimId:guid}/documents")]
-    [Authorize(Roles = "Adjuster,Supervisor")]
+    [Authorize(Roles = "Adjuster,Supervisor,Director")]
     [RequestSizeLimit(20_000_000)]
     [ProducesResponseType<ClaimDocumentDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -196,7 +196,7 @@ public sealed class ClaimsController : ControllerBase
     /// followed by the final run result. Requires Adjuster or Supervisor.
     /// </summary>
     [HttpPost("{claimId:guid}/adjudicate")]
-    [Authorize(Roles = "Adjuster,Supervisor")]
+    [Authorize(Roles = "Adjuster,Supervisor,Director")]
     public async Task Adjudicate(Guid claimId, [FromQuery] string? correlationId, CancellationToken ct)
     {
         Response.Headers.ContentType = "text/event-stream";

@@ -58,7 +58,7 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddHttpContextAccessor();
 
 // ---------------------------------------------------------------------------
-// Identity + JWT bearer auth. Roles: Adjuster, Supervisor, Viewer.
+// Identity + JWT bearer auth. Roles: Adjuster, Supervisor, Director, Viewer.
 // ---------------------------------------------------------------------------
 var jwt = builder.Configuration.GetSection("Jwt");
 var issuer = jwt["Issuer"] ?? "claimpilot";

@@ -64,6 +64,9 @@ services:
       Ollama__BaseUrl: http://ollama:11434
       Ollama__ChatModel: llama3.2
       Ollama__EmbeddingModel: nomic-embed-text
+      Gemini__ApiKey: ${GEMINI_API_KEY:-}
+      Gemini__ChatModel: ${GEMINI_CHAT_MODEL:-gemini-3.6-flash}
+      Gemini__EmbeddingModel: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
       Jwt__Key: ${JWT_KEY:-ClaimPilotDevSigningKeyChangeMe_0123456789ABCDEF}
     ports:
       - "${API_PORT:-8080}:8080"

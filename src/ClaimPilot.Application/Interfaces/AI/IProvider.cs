@@ -33,6 +33,25 @@ public sealed record EmbeddingResult(
 
 public sealed record ChatMessage(string Role, string Content);
 
+/// <summary>One complete AI pipeline owns both retrieval embeddings and generation for a run.</summary>
+public enum AiPipeline
+{
+    Gemini,
+    Ollama
+}
+
+public interface IAiPipelineContext
+{
+    AiPipeline Current { get; }
+    void Select(AiPipeline pipeline, string? reason = null);
+    string? FallbackReason { get; }
+}
+
+public interface IEmbeddingProviderResolver
+{
+    IEmbeddingProvider Get(AiPipeline pipeline);
+}
+
 public delegate Task UsageRecordedHandler(UsageRecord record, CancellationToken ct);
 
 /// <summary>

@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -45,7 +46,9 @@ public sealed class AuthController : ControllerBase
     [Authorize]
     public async Task<ActionResult<LoginResponse>> Me()
     {
-        var userId = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        // JwtBearer may map `sub` to NameIdentifier, depending on token mapping settings.
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         var user = await _users.FindByIdAsync(userId ?? string.Empty);
         if (user is null) return Unauthorized();
 

@@ -52,6 +52,53 @@ public sealed record AskRequest(
     [Required] string PolicyNumber,
     DateTime? IncidentDate);
 
+public sealed record PolicyOptionDto(string PolicyNumber, string Name, string ProductLine);
+
+public sealed record PolicyDetailDto(
+    string PolicyNumber,
+    string Name,
+    string ProductLine,
+    string Status,
+    IReadOnlyList<PolicyWordingDto> Wordings);
+
+public sealed record PolicyWordingDto(
+    int Version,
+    DateTime EffectiveDate,
+    string Status,
+    IReadOnlyList<CoverageItemDto> CoverageItems,
+    IReadOnlyList<PolicyExclusionDto> Exclusions,
+    IReadOnlyList<PolicySectionDto> Sections);
+
+public sealed record CoverageItemDto(
+    string Code, string Name, string Type, decimal? Amount, decimal? PercentageRate, string? Description);
+
+public sealed record PolicyExclusionDto(string Code, string Name, string Description);
+
+public sealed record PolicySectionDto(string Section, string Clause, int? Page, string Content);
+
+public sealed record CoverageSeedItemDto(
+    [Required, MaxLength(64)] string Code,
+    [Required, MaxLength(256)] string Name,
+    [Required] string Type,
+    decimal? Amount,
+    decimal? PercentageRate,
+    string? Description);
+
+public sealed record ExclusionSeedItemDto(
+    [Required, MaxLength(64)] string Code,
+    [Required, MaxLength(256)] string Name,
+    [Required] string Description);
+
+public sealed record SeedStructuredDataRequest(
+    IReadOnlyList<CoverageSeedItemDto>? CoverageItems,
+    IReadOnlyList<ExclusionSeedItemDto>? Exclusions);
+
+public sealed record SeedStructuredDataResponse(
+    int CoverageItemsInserted,
+    int CoverageItemsSkipped,
+    int ExclusionsInserted,
+    int ExclusionsSkipped);
+
 public sealed record AskResponse(
     string Answer,
     bool Refused,
@@ -75,6 +122,17 @@ public sealed record ReviewReReviewBody(string? Comment);
 public sealed record ReviewAssignBody([Required] AssigneeRole Assignee, string? Comment);
 public sealed record ReviewEscalateBody(string? Comment);
 public sealed record ReviewPriorityBody([Required] Priority NewPriority, string? Comment);
+
+public sealed record ReviewExplanationDto(
+    Guid RunId,
+    IReadOnlyList<ReviewExclusionDto> Exclusions,
+    IReadOnlyList<ReviewAnomalyDto> Anomalies,
+    IReadOnlyList<ReviewComputationStepDto> ComputationSteps,
+    string? InsufficiencyReason);
+
+public sealed record ReviewExclusionDto(string Code, string? Name, bool Applies, string? Evidence);
+public sealed record ReviewAnomalyDto(string Type, string Severity, string Description, string? Evidence);
+public sealed record ReviewComputationStepDto(string Step, string Description, decimal? Amount, string? Detail);
 
 public sealed record TraceViewResponse(
     string RunId,

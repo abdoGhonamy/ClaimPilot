@@ -46,24 +46,34 @@ public static class DependencyInjection
             }));
 
         return services
-            .AddOllama(configuration)
+            .AddLlmProviders(configuration)
             .AddRepositories()
             .AddDocumentServices()
             .AddRedis(configuration)
             .AddBackgroundWorkers();
     }
 
-    private static IServiceCollection AddOllama(this IServiceCollection services, IConfiguration configuration)
+    private static IServiceCollection AddLlmProviders(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<OllamaOptions>(configuration.GetSection("Ollama"));
+        services.Configure<GeminiOptions>(configuration.GetSection("Gemini"));
 
         services.AddHttpClient<OllamaLLMProvider>();
         services.AddHttpClient<OllamaEmbeddingProvider>();
+        services.AddHttpClient<GeminiLLMProvider>();
+        services.AddHttpClient<GeminiEmbeddingProvider>();
+        services.AddSingleton<AiPipelineContext>();
+        services.AddSingleton<IAiPipelineContext>(sp => sp.GetRequiredService<AiPipelineContext>());
+        services.AddSingleton<EmbeddingProviderResolver>();
+        services.AddSingleton<IEmbeddingProviderResolver>(sp => sp.GetRequiredService<EmbeddingProviderResolver>());
+        services.AddSingleton<FallbackLLMProvider>();
         services.AddSingleton<DeterministicLLMProvider>();
         services.AddSingleton<ILLMProvider>(sp =>
             string.Equals(configuration["AI:Provider"], "Deterministic", StringComparison.OrdinalIgnoreCase)
                 ? sp.GetRequiredService<DeterministicLLMProvider>()
-                : sp.GetRequiredService<OllamaLLMProvider>());
+                : sp.GetRequiredService<FallbackLLMProvider>());
+        // Legacy interface remains Ollama for existing deterministic seed paths. Runtime retrieval
+        // uses IEmbeddingProviderResolver and never mixes provider vector spaces.
         services.AddSingleton<IEmbeddingProvider>(sp => sp.GetRequiredService<OllamaEmbeddingProvider>());
 
         services.AddHostedService<UsageEventForwarder>();

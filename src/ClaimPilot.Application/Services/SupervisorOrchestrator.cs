@@ -434,7 +434,12 @@ public sealed class SupervisorOrchestrator : IClaimsOrchestrator
             {
                 var list = new List<ApplicableExclusion>();
                 foreach (var code in codes.EnumerateArray())
-                    list.Add(new ApplicableExclusion(code.GetString() ?? string.Empty, string.Empty, string.Empty));
+                {
+                    var item = code.ValueKind == JsonValueKind.String
+                        ? code.GetString() ?? string.Empty
+                        : code.TryGetProperty("Code", out var c) ? c.ToString() : string.Empty;
+                    list.Add(new ApplicableExclusion(item, string.Empty, string.Empty));
+                }
                 return list;
             }
         }

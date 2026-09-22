@@ -133,11 +133,14 @@ public sealed class ToolRegistryService : IToolRegistry
         var exclusions = (await _policies.GetExclusionsAsync(version.Id, ct))
             .Select(e => new PolicyExclusionLine(e.Code, e.Name, e.Description ?? string.Empty)).ToList();
 
-        return new PolicyMatchResult(policy.Id, version.Id, version.Version, version.EffectiveDate,
+        var result = new PolicyMatchResult(policy.Id, version.Id, version.Version, version.EffectiveDate,
             coverage.Select(c => new CoverageLine(c.Code, c.Name, c.Amount,
                 coverage.FirstOrDefault(x => x.Type == CoverageType.Deductible)?.Amount,
                 c.PercentageRate, c.Description ?? string.Empty)).ToList(),
             exclusions);
+        _logger.LogInformation("RetrievePolicyVersioned returned for run {RunId}: {Json}",
+            runId, JsonSerializer.Serialize(result));
+        return result;
     }
 
     private async Task<string> ListCoverageItemsAsync(IReadOnlyDictionary<string, string> p, CancellationToken ct)
@@ -172,22 +175,43 @@ public sealed class ToolRegistryService : IToolRegistry
             return JsonSerializer.Serialize(new ExclusionCheckResult(false, code, null, "Exclusion not found for this version."));
 
         // Deterministic keyword applicability check; evidence is always the exclusion text.
-        var isApplicable = IsApplicable(exclusion, description);
+        var isApplicable = IsApplicable(exclusion, description, out var keywords, out var matched);
+        _logger.LogInformation(
+            "Exclusion {Code}: text='{Text}', claim='{Claim}', keywords=[{Keywords}], matched=[{Matched}], result={Result}",
+            exclusion.Code, exclusion.Description, description, string.Join(",", keywords), string.Join(",", matched), isApplicable);
         return JsonSerializer.Serialize(new ExclusionCheckResult(isApplicable, exclusion.Code, exclusion.Name,
             isApplicable ? $"Exclusion '{exclusion.Code}' ({exclusion.Name}) text: {exclusion.Description}" : "No matching keywords in claim description."));
     }
 
-    private static bool IsApplicable(Exclusion exclusion, string description)
+    private static readonly HashSet<string> ExclusionStopwords = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (string.IsNullOrWhiteSpace(description)) return false;
-        var keywords = exclusion.Description
-            .Split(' ', ',', ';', '.', '(', ')')
+        "coverage", "apply", "applies", "policy", "insured", "shall", "this", "that",
+        "with", "from", "loss", "damage", "caused", "directly", "indirectly", "result",
+        "resulting", "occurring", "under", "which", "while", "used", "any", "all", "not"
+    };
+
+    private static bool IsApplicable(
+        Exclusion exclusion,
+        string description,
+        out IReadOnlyList<string> keywords,
+        out IReadOnlyList<string> matched)
+    {
+        keywords = Array.Empty<string>();
+        matched = Array.Empty<string>();
+        if (string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(exclusion.Description)) return false;
+
+        keywords = exclusion.Description
+            .ToLowerInvariant()
+            .Split(new[] { ' ', ',', ';', '.', '(', ')', '\n', '\r', '\t', '-' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(w => w.Trim())
-            .Where(w => w.Length > 4)
+            .Where(w => w.Length >= 4)
+            .Where(w => !ExclusionStopwords.Contains(w))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var hits = keywords.Count(k => description.Contains(k, StringComparison.OrdinalIgnoreCase));
-        return hits >= 2;
+        matched = keywords
+            .Where(keyword => description.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return matched.Count >= 1;
     }
 
     /// <summary>

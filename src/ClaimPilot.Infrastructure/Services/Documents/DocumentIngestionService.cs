@@ -20,7 +20,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
 {
     private readonly IPolicyRepository _policies;
     private readonly IChunkRepository _chunks;
-    private readonly IEmbeddingProvider _embeddings;
+    private readonly IEmbeddingProviderResolver _embeddingProviders;
     private readonly IFileTextExtractor[] _extractors;
     private readonly IChunkingStrategy _chunking;
     private readonly ILogger<DocumentIngestionService> _logger;
@@ -28,14 +28,14 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
     public DocumentIngestionService(
         IPolicyRepository policies,
         IChunkRepository chunks,
-        IEmbeddingProvider embeddings,
+        IEmbeddingProviderResolver embeddingProviders,
         IEnumerable<IFileTextExtractor> extractors,
         IChunkingStrategy chunking,
         ILogger<DocumentIngestionService> logger)
     {
         _policies = policies;
         _chunks = chunks;
-        _embeddings = embeddings;
+        _embeddingProviders = embeddingProviders;
         _extractors = extractors.ToArray();
         _chunking = chunking;
         _logger = logger;
@@ -45,6 +45,11 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
         string policyNumber, int version, DateTime effectiveDate, string fileName,
         string contentType, Stream content, CancellationToken ct)
     {
+        // Npgsql 9+ requires Kind=Utc when projecting DateTime onto a
+        // "timestamp with time zone" column; an Unspecified kind raised
+        // DbUpdateException/500 during chunk persistence. Normalize once here
+        // so every effective-date write path uses UTC.
+        effectiveDate = DateTime.SpecifyKind(effectiveDate, DateTimeKind.Utc);
         var extractor = _extractors.FirstOrDefault(e => e.Supports(contentType, fileName));
         if (extractor is null)
         {
@@ -115,11 +120,11 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
 
             if (chunks.Count > 0)
             {
-                // Embed before persist to avoid saving unsearchable rows.
+                // Each provider owns a distinct vector space. A Gemini outage must not
+                // discard the local Ollama index; a later re-index can fill Gemini.
                 var texts = chunks.Select(c => $"{c.Section} {c.Clause}\n{c.Content}").ToList();
-                var vectors = await _embeddings.EmbedBatchAsync(texts, ct);
-                for (var i = 0; i < chunks.Count; i++)
-                    chunks[i].Embedding = vectors[i].Vector;
+                await AddProviderEmbeddingsAsync(chunks, texts, AiPipeline.Ollama, required: true, ct);
+                await AddProviderEmbeddingsAsync(chunks, texts, AiPipeline.Gemini, required: false, ct);
 
                 await _chunks.AddRangeAsync(chunks, ct);
             }
@@ -141,6 +146,28 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
                 Status = DocumentStatus.Failed,
                 Error = ex.Message
             };
+        }
+    }
+
+    private async Task AddProviderEmbeddingsAsync(IReadOnlyList<PolicyChunk> chunks, IReadOnlyList<string> texts,
+        AiPipeline pipeline, bool required, CancellationToken ct)
+    {
+        try
+        {
+            var provider = _embeddingProviders.Get(pipeline);
+            var vectors = await provider.EmbedBatchAsync(texts, ct);
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                chunks[i].Embeddings.Add(new PolicyChunkEmbedding
+                {
+                    PolicyChunk = chunks[i], Provider = provider.ProviderName, Model = provider.ModelName, Vector = vectors[i].Vector
+                });
+                if (pipeline == AiPipeline.Ollama) chunks[i].Embedding = vectors[i].Vector; // legacy compatibility
+            }
+        }
+        catch (Exception ex) when (!required)
+        {
+            _logger.LogWarning(ex, "{Provider} embeddings were deferred; Ollama remains searchable.", pipeline);
         }
     }
 

@@ -8,7 +8,7 @@ namespace ClaimPilot.API.Controllers;
 
 [ApiController]
 [Route("api/documents")]
-[Authorize(Roles = "Adjuster,Supervisor")]
+[Authorize(Roles = "Adjuster,Supervisor,Director")]
 public sealed class DocumentsController : ControllerBase
 {
     private readonly IDocumentIngestionService _ingestion;
